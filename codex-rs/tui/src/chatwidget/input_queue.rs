@@ -41,6 +41,9 @@ pub(super) struct InputQueueState {
     /// When set, the next interrupt should resubmit all pending steers as one
     /// fresh user turn instead of restoring them into the composer.
     pub(super) submit_pending_steers_after_interrupt: bool,
+    /// Enter queued a fresh message and requested an interrupt. Once the
+    /// interrupted turn ends, submit the oldest queued message automatically.
+    pub(super) auto_submit_after_interrupt: bool,
     pub(super) suppress_queue_autosend: bool,
     /// Hold submissions while a usage failure or backend-directed model fallback is resolved.
     pub(super) rate_limit_recovery_pending: bool,
@@ -61,6 +64,7 @@ impl InputQueueState {
         self.rejected_steer_history_records.clear();
         self.pending_steers.clear();
         self.submit_pending_steers_after_interrupt = false;
+        self.auto_submit_after_interrupt = false;
         self.rate_limit_recovery_pending = false;
     }
 
@@ -146,6 +150,7 @@ mod tests {
             .push_back(UserMessage::from("rejected"));
         state.user_turn_pending_start = true;
         state.submit_pending_steers_after_interrupt = true;
+        state.auto_submit_after_interrupt = true;
 
         state.clear();
 
@@ -156,5 +161,6 @@ mod tests {
         assert!(state.rejected_steer_history_records.is_empty());
         assert!(state.pending_steers.is_empty());
         assert!(!state.submit_pending_steers_after_interrupt);
+        assert!(!state.auto_submit_after_interrupt);
     }
 }

@@ -133,6 +133,7 @@ pub(crate) struct ThreadInputState {
     pub(crate) recovered_queue: bool,
     pub(super) user_turn_pending_start: bool,
     pub(super) submit_pending_steers_after_interrupt: bool,
+    pub(super) auto_submit_after_interrupt: bool,
     pub(super) current_collaboration_mode: CollaborationMode,
     pub(super) active_collaboration_mask: Option<CollaborationModeMask>,
     pub(super) task_running: bool,

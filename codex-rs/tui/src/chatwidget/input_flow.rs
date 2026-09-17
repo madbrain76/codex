@@ -36,6 +36,29 @@ impl ChatWidget {
                     && (!self.input_queue.user_turn_pending_start
                         || self.turn_lifecycle.agent_turn_running);
                 if should_submit_now {
+                    if self.turn_lifecycle.agent_turn_running
+                        && !had_modal_or_popup
+                        && !self.review.is_review_mode
+                        && !self.only_user_shell_commands_running()
+                        && !user_message.text.starts_with('!')
+                    {
+                        let queued_count = self.input_queue.queued_user_messages.len();
+                        self.queue_user_message(user_message);
+                        if self.input_queue.queued_user_messages.len() > queued_count
+                            && !self.input_queue.auto_submit_after_interrupt
+                        {
+                            self.input_queue.auto_submit_after_interrupt = true;
+                            if self.submit_op(AppCommand::interrupt()) {
+                                self.pause_active_goal_for_interrupt();
+                            } else {
+                                self.input_queue.auto_submit_after_interrupt = false;
+                                if let Some(composer) = self.pop_latest_queued_composer_state() {
+                                    self.restore_composer_state(composer);
+                                }
+                            }
+                        }
+                        return;
+                    }
                     if self.only_user_shell_commands_running()
                         && !user_message.text.starts_with('!')
                     {

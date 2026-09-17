@@ -242,7 +242,11 @@ impl ChatWidget {
         let send_pending_steers_immediately =
             self.input_queue.submit_pending_steers_after_interrupt;
         self.input_queue.submit_pending_steers_after_interrupt = false;
-        if self.interrupted_turn_notice_mode != InterruptedTurnNoticeMode::Suppress {
+        let auto_submit_after_interrupt = self.input_queue.auto_submit_after_interrupt;
+        self.input_queue.auto_submit_after_interrupt = false;
+        if !auto_submit_after_interrupt
+            && self.interrupted_turn_notice_mode != InterruptedTurnNoticeMode::Suppress
+        {
             if send_pending_steers_immediately {
                 self.add_to_history(history_cell::new_info_event(
                     "Model interrupted to submit steer instructions.".to_owned(),
@@ -272,6 +276,8 @@ impl ChatWidget {
             } else if let Some(combined) = self.drain_pending_messages_for_restore() {
                 self.restore_composer_state(combined);
             }
+        } else if auto_submit_after_interrupt {
+            self.maybe_send_next_queued_input();
         } else if let Some(combined) = self.drain_pending_messages_for_restore() {
             self.restore_composer_state(combined);
         }
@@ -468,6 +474,7 @@ impl ChatWidget {
             submit_pending_steers_after_interrupt: self
                 .input_queue
                 .submit_pending_steers_after_interrupt,
+            auto_submit_after_interrupt: self.input_queue.auto_submit_after_interrupt,
             current_collaboration_mode: self.current_collaboration_mode.clone(),
             active_collaboration_mask: self.active_collaboration_mask.clone(),
             task_running: self.bottom_pane.is_task_running(),
@@ -497,6 +504,8 @@ impl ChatWidget {
                 preserve_in_flight_turn && input_state.user_turn_pending_start;
             self.input_queue.submit_pending_steers_after_interrupt =
                 preserve_in_flight_turn && input_state.submit_pending_steers_after_interrupt;
+            self.input_queue.auto_submit_after_interrupt =
+                preserve_in_flight_turn && input_state.auto_submit_after_interrupt;
             self.update_collaboration_mode_indicator();
             self.refresh_model_dependent_surfaces();
             self.restore_composer_state(input_state.composer.unwrap_or_default());

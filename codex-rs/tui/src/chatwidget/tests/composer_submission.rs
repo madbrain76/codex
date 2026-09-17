@@ -1773,6 +1773,7 @@ async fn restore_thread_input_state_applies_running_state_policy() {
         recovered_queue: false,
         user_turn_pending_start: true,
         submit_pending_steers_after_interrupt: true,
+        auto_submit_after_interrupt: false,
         current_collaboration_mode: chat.current_collaboration_mode.clone(),
         active_collaboration_mask: chat.active_collaboration_mask.clone(),
         task_running: true,
