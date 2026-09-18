@@ -4079,6 +4079,7 @@ dependencies = [
  "serde",
  "tempfile",
  "toml 0.9.11+spec-1.1.0",
+ "url",
 ]
 
 [[package]]
@@ -4132,6 +4133,7 @@ dependencies = [
  "clap",
  "codex-utils-absolute-path",
  "codex-utils-home-dir",
+ "codex-utils-path-uri",
  "codex-utils-rustls-provider",
  "codex-windows-sandbox",
  "globset",
