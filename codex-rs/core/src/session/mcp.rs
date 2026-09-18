@@ -10,6 +10,7 @@ use codex_mcp::ElicitationReviewRequest;
 use codex_mcp::ElicitationReviewer;
 use codex_mcp::ElicitationReviewerHandle;
 use codex_mcp::MCP_TOOL_CODEX_APPS_META_KEY;
+use codex_prompts::ResolvedModelMessages;
 use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::config_types::ApprovalsReviewer;
@@ -98,11 +99,12 @@ impl Session {
         config: &Config,
     ) -> (McpConfig, McpRuntimeContext) {
         let originator = self.originator().await;
-        let (session_source, host_fallback_cwd) = {
+        let (session_source, host_fallback_cwd, disabled_plugin_ids) = {
             let state = self.state.lock().await;
             (
                 state.session_configuration.session_source.clone(),
                 state.session_configuration.cwd().clone(),
+                state.active_disabled_plugin_ids.clone(),
             )
         };
         let environments = self.services.turn_environments.snapshot().await;
@@ -128,6 +130,7 @@ impl Session {
                 McpThreadIdentity {
                     session_source: &session_source,
                     originator: &originator,
+                    disabled_plugin_ids: &disabled_plugin_ids,
                     environments: McpEnvironmentScope::Live(&self.services.turn_environments),
                 },
                 &ready_selected_capability_roots,
@@ -135,12 +138,7 @@ impl Session {
             )
             .await;
         let mcp_config = self
-            .project_selected_environment_mcp_servers(
-                &session_source,
-                config,
-                &environments,
-                mcp_projection,
-            )
+            .project_selected_environment_mcp_servers(config, &environments, mcp_projection)
             .await
             .config;
         let local_process_cwd = environments
@@ -238,6 +236,7 @@ impl Session {
                     McpThreadIdentity {
                         session_source: &desired.session_source,
                         originator: &desired.originator,
+                        disabled_plugin_ids: &desired.disabled_plugin_ids,
                         environments: McpEnvironmentScope::Live(&self.services.turn_environments),
                     },
                     &ready_selected_capability_roots,
@@ -304,6 +303,7 @@ impl Session {
                 McpThreadIdentity {
                     session_source: &desired.session_source,
                     originator: &desired.originator,
+                    disabled_plugin_ids: &desired.disabled_plugin_ids,
                     environments: McpEnvironmentScope::Live(&self.services.turn_environments),
                 },
                 &ready_selected_capability_roots,
@@ -312,7 +312,6 @@ impl Session {
             .await;
         let mcp_projection = self
             .project_selected_environment_mcp_servers(
-                &desired.session_source,
                 &desired.config,
                 &desired.environments,
                 mcp_projection,
@@ -557,16 +556,20 @@ impl Session {
         server_name: String,
         request_id: RequestId,
         request: ElicitationRequest,
-    ) -> McpServerElicitationOutcome {
+    ) -> anyhow::Result<McpServerElicitationOutcome> {
+        anyhow::ensure!(
+            !turn_context.session_source.is_non_root_agent(),
+            codex_mcp::MCP_ELICITATION_HANDOFF_MESSAGE
+        );
         if self.services.mcp_runtime.elicitations_auto_deny() {
-            return McpServerElicitationOutcome {
+            return Ok(McpServerElicitationOutcome {
                 response: Some(ElicitationResponse {
                     action: codex_rmcp_client::ElicitationAction::Accept,
                     content: Some(serde_json::json!({})),
                     meta: None,
                 }),
                 sent: false,
-            };
+            });
         }
 
         let _elicitation = self.services.elicitations.register();
@@ -618,10 +621,10 @@ impl Session {
                     plugin_install_telemetry.tool_name.as_str(),
                 );
         }
-        McpServerElicitationOutcome {
+        Ok(McpServerElicitationOutcome {
             response: rx_response.await.ok(),
             sent: true,
-        }
+        })
     }
 
     #[expect(
@@ -668,12 +671,13 @@ impl Session {
             return;
         };
         let auth = self.services.auth_manager.auth().await;
-        {
+        let disabled_plugin_ids = {
             let mut state = self.state.lock().await;
             let mut config = (*state.session_configuration.original_config_do_not_use).clone();
             config.mcp_servers = refresh_config.mcp_servers.clone();
             state.session_configuration.original_config_do_not_use = Arc::new(config);
-        }
+            state.active_disabled_plugin_ids.clone()
+        };
         let ready_selected_capability_roots = self
             .services
             .mcp_runtime
@@ -696,6 +700,7 @@ impl Session {
                 McpThreadIdentity {
                     session_source: &turn_context.session_source,
                     originator: &turn_context.originator,
+                    disabled_plugin_ids: &disabled_plugin_ids,
                     environments: McpEnvironmentScope::Live(&self.services.turn_environments),
                 },
                 &ready_selected_capability_roots,
@@ -789,9 +794,8 @@ async fn review_guardian_mcp_elicitation(
             .meta()
             .and_then(|meta| meta.get("callId"))
             .and_then(Value::as_str)
-        && let Some((Some(invocation), _)) = session
-            .mcp_tool_approval_metadata(&turn_context.sub_id, call_id)
-            .await
+        && let Some((Some(invocation), _)) =
+            session.mcp_tool_approval_metadata(&request.server_name, call_id)
         && invocation.server == request.server_name
     {
         Some(call_id)
@@ -828,9 +832,8 @@ async fn review_guardian_mcp_elicitation(
             else {
                 return Ok(None);
             };
-            let Some((Some(invocation), metadata)) = session
-                .mcp_tool_approval_metadata(&turn_context.sub_id, call_id)
-                .await
+            let Some((Some(invocation), metadata)) =
+                session.mcp_tool_approval_metadata(&request.server_name, call_id)
             else {
                 return Ok(None);
             };
@@ -1161,7 +1164,10 @@ fn mcp_elicitation_response_from_guardian_decision(
         },
         ReviewDecision::Denied { rejection } => mcp_elicitation_decline_with_message(rejection),
         ReviewDecision::TimedOut => mcp_elicitation_decline_with_message(
-            crate::guardian::guardian_timeout_message(model_info),
+            ResolvedModelMessages::from_model(model_info)
+                .auto_review()
+                .timeout_instructions
+                .to_string(),
         ),
         ReviewDecision::Abort => ElicitationResponse {
             action: ElicitationAction::Cancel,

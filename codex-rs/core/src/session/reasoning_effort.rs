@@ -1,13 +1,14 @@
 //! Cache-preserving effort updates and the request-effort baseline for a context window.
 //!
-//! Only trusted harness items establish overrides. Replay invalidates the runtime pin;
-//! successful compaction retires the overrides and allows a fresh request baseline.
+//! Only trusted harness items establish overrides. Replay preserves startup prewarm's
+//! baseline while it is retained.
+//! Successful compaction retires the overrides and allows a fresh request baseline.
+//! Synchronous Guardian reviewers always use their selected request-level effort.
 
 use super::session::Session;
 use super::step_context::StepContext;
 use super::step_settings::ResolvedStepSettings;
 use crate::state::ReasoningEffortPin;
-use codex_features::Feature;
 use codex_history::CodexHarnessMetadata;
 use codex_history::ResponseItemEnvelope;
 use codex_protocol::models::ConfigurationReasoning;
@@ -31,37 +32,42 @@ impl Session {
         let should_skip = {
             let mut state = self.state.lock().await;
             if matches!(state.reasoning_effort_pin, ReasoningEffortPin::Compacted) {
-                // Replay leaves the pin Unset. Only successful compaction allows the
-                // request baseline to establish the selection without another update.
+                // Only successful compaction allows the request baseline to establish
+                // the selection without another update.
                 state
                     .reasoning_effort_pin
                     .pin(&settings.model_info.slug, effort.clone());
             }
-            let established_effort =
-                state
-                    .history
-                    .annotated_items()
-                    .iter()
-                    .rev()
-                    .find_map(|envelope| {
-                        if !envelope
-                            .metadata
-                            .as_ref()
-                            .is_some_and(|metadata| metadata.harness_authored_configuration)
-                        {
-                            return None;
+            let latest_override = state
+                .history
+                .annotated_items()
+                .iter()
+                .rev()
+                .enumerate()
+                .find_map(|(index, envelope)| {
+                    if !envelope
+                        .metadata
+                        .as_ref()
+                        .is_some_and(|metadata| metadata.harness_authored_configuration)
+                    {
+                        return None;
+                    }
+                    match &envelope.item {
+                        ResponseItem::ConfigurationUpdate { reasoning } => {
+                            Some((index, &reasoning.effort))
                         }
-                        match &envelope.item {
-                            ResponseItem::ConfigurationUpdate { reasoning } => {
-                                Some(&reasoning.effort)
-                            }
-                            _ => None,
-                        }
-                    });
-            state
-                .reasoning_effort_pin
-                .get(&settings.model_info.slug)
-                .is_some_and(|pinned| established_effort.unwrap_or(&pinned) == &effort)
+                        _ => None,
+                    }
+                });
+            // Recovery adds no user message. Reuse a matching trusted tail update even
+            // before this runtime establishes its pin, rather than append adjacent updates.
+            latest_override.is_some_and(|(index, established)| index == 0 && established == &effort)
+                || state
+                    .reasoning_effort_pin
+                    .get(&settings.model_info.slug)
+                    .is_some_and(|pinned| {
+                        latest_override.map_or(&pinned, |(_, established)| established) == &effort
+                    })
         };
         if should_skip {
             return;
@@ -69,6 +75,7 @@ impl Session {
 
         self.record_annotated_conversation_items(
             step_context.turn.as_ref(),
+            &step_context.settings.model_info,
             vec![ResponseItemEnvelope {
                 item: ResponseItem::ConfigurationUpdate {
                     reasoning: ConfigurationReasoning { effort },
@@ -89,7 +96,11 @@ impl Session {
         usage: RequestEffortUsage,
     ) -> Option<ReasoningEffort> {
         let selected_effort = settings.reasoning_effort().cloned();
-        if !self.enabled(Feature::ReasoningEffortOverride) {
+        if !self
+            .services
+            .model_client
+            .reasoning_effort_override_enabled()
+        {
             return selected_effort;
         }
         if usage == RequestEffortUsage::Compaction
@@ -123,7 +134,10 @@ impl Session {
         &self,
         settings: &ResolvedStepSettings,
     ) -> Option<ReasoningEffort> {
-        if !self.enabled(Feature::ReasoningEffortOverride)
+        if !self
+            .services
+            .model_client
+            .reasoning_effort_override_enabled()
             || !settings.model_info.use_responses_lite
             || !self.provider().await.is_openai()
         {

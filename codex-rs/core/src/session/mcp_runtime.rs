@@ -28,6 +28,7 @@ pub(super) struct McpDesiredState {
     pub(super) session_source: SessionSource,
     pub(super) environments: TurnEnvironmentSnapshot,
     pub(super) local_process_cwd: PathBuf,
+    pub(super) disabled_plugin_ids: Vec<String>,
 }
 
 impl Session {
@@ -35,7 +36,6 @@ impl Session {
         &self,
         current: &SessionConfiguration,
         next: &SessionConfiguration,
-        updates: &SessionSettingsUpdate,
     ) -> bool {
         current.cwd() != next.cwd()
             || current.step_settings.approval_policy.value()
@@ -43,9 +43,6 @@ impl Session {
             || current.step_settings.approvals_reviewer != next.step_settings.approvals_reviewer
             || current.permission_profile() != next.permission_profile()
             || current.windows_sandbox_level != next.windows_sandbox_level
-            || updates.environments.as_ref().is_some_and(|environments| {
-                environments.environments != self.services.turn_environments.selections()
-            })
     }
 
     /// Waits on this session's refreshed server before tool execution is admitted.
@@ -75,16 +72,25 @@ impl Session {
         &self,
         auth: Option<CodexAuth>,
     ) -> McpDesiredState {
-        let session_configuration = {
+        let (session_configuration, disabled_plugin_ids, environments) = {
             let state = self.state.lock().await;
-            state.session_configuration.clone()
+            // MCP tools must use current environments, not the selection saved for the next turn.
+            (
+                state.session_configuration.clone(),
+                state.active_disabled_plugin_ids.clone(),
+                self.services.turn_environments.snapshot(),
+            )
         };
-        let environments = self.services.turn_environments.snapshot().await;
+        let environments = environments.await;
         let cwd = environments
             .primary()
             .and_then(|environment| environment.cwd().to_abs_path().ok())
             .unwrap_or_else(|| session_configuration.cwd().clone());
-        let config = self.build_per_turn_config(&session_configuration, cwd);
+        let config = self.build_per_turn_config(
+            &session_configuration,
+            cwd,
+            environments.primary_workspace_roots(),
+        );
         let local_process_cwd = environments
             .local_environment_cwd()
             .unwrap_or_else(|| session_configuration.cwd().clone())
@@ -98,6 +104,7 @@ impl Session {
             session_source: session_configuration.session_source.clone(),
             environments,
             local_process_cwd,
+            disabled_plugin_ids,
         }
     }
 
@@ -111,7 +118,11 @@ impl Session {
     ) -> anyhow::Result<()> {
         let cwd = AbsolutePathBuf::from_absolute_path(mcp_runtime_cwd)
             .unwrap_or_else(|_| session_configuration.cwd().clone());
-        let config = self.build_per_turn_config(session_configuration, cwd);
+        let config = self.build_per_turn_config(
+            session_configuration,
+            cwd,
+            resolved_environments.primary_workspace_roots(),
+        );
         let local_process_cwd = resolved_environments
             .local_environment_cwd()
             .unwrap_or_else(|| session_configuration.cwd().clone())
@@ -124,6 +135,7 @@ impl Session {
             session_source: session_configuration.session_source.clone(),
             environments: resolved_environments.clone(),
             local_process_cwd,
+            disabled_plugin_ids: session_configuration.disabled_plugin_ids.clone(),
         };
         self.publish_mcp_runtime(
             &desired,
@@ -143,13 +155,12 @@ impl Session {
     /// Adds effective executor-owned configuration from this exact thread snapshot.
     pub(super) fn project_selected_environment_mcp_servers<'a>(
         &'a self,
-        session_source: &'a SessionSource,
         config: &'a Config,
         environments: &'a TurnEnvironmentSnapshot,
         mut projection: McpRuntimeProjection,
     ) -> BoxFuture<'a, McpRuntimeProjection> {
         Box::pin(async move {
-            if crate::guardian::is_basic_session_source(session_source) {
+            if self.isolation == codex_extension_api::SessionIsolation::Isolated {
                 return projection;
             }
 
@@ -306,7 +317,6 @@ impl Session {
     ) {
         let mcp_projection = self
             .project_selected_environment_mcp_servers(
-                &desired.session_source,
                 &desired.config,
                 &desired.environments,
                 mcp_projection,
@@ -400,6 +410,7 @@ impl Session {
             client_mcp_extensions: self.services.client_mcp_extensions.for_mcp_servers(),
             auth,
             auth_manager: Some(Arc::clone(&self.services.auth_manager)),
+            allow_user_interaction: !desired.session_source.is_non_root_agent(),
             elicitation_reviewer,
             elicitation_lifecycle: Some(self.mcp_elicitation_lifecycle()),
         }

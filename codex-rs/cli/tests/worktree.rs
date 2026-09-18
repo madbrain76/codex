@@ -214,12 +214,18 @@ trust_level = "trusted"
     env.insert("NO_PROXY".into(), "127.0.0.1,localhost".into());
     env.insert("no_proxy".into(), "127.0.0.1,localhost".into());
     env.insert("TERM".into(), "xterm-256color".into());
+    env.insert("TERM_PROGRAM".into(), "unrecognized-terminal".into());
     env.insert("OTEL_METRIC_EXPORT_INTERVAL".into(), "100".into());
     for key in [
         "CODEX_EXEC_SERVER_URL",
         "CODEX_ACCESS_TOKEN",
         "OPENAI_API_KEY",
         "CODEX_API_KEY",
+        "TMUX",
+        "TMUX_PANE",
+        "ZELLIJ",
+        "ZELLIJ_SESSION_NAME",
+        "ZELLIJ_VERSION",
     ] {
         env.remove(key);
     }
@@ -440,7 +446,29 @@ trust_level = "trusted"
             );
         }
         if matches!(startup_result, Ok(Ok(()))) && renamed.is_ok() {
-            session.writer_sender().send(b"/quit\r".to_vec()).await?;
+            if !fork {
+                for (input, expected) in [
+                    ("/daemon\r", "Install latest public stable"),
+                    ("\r", "Update and exit"),
+                    ("\x1b[B\r", "Updating the local background server..."),
+                ] {
+                    session
+                        .writer_sender()
+                        .send(input.as_bytes().to_vec())
+                        .await?;
+                    tokio::time::timeout(Duration::from_secs(/*secs*/ 10), async {
+                        while !output.contains(expected) {
+                            let bytes = stdout.recv().await.context("TUI exited before handoff")?;
+                            output.push_str(&String::from_utf8_lossy(&bytes));
+                        }
+                        Ok::<_, anyhow::Error>(())
+                    })
+                    .await
+                    .with_context(|| format!("waiting for {expected}: {output}"))??;
+                }
+            } else {
+                session.writer_sender().send(b"/quit\r".to_vec()).await?;
+            }
         } else {
             session.terminate();
         }
@@ -453,7 +481,9 @@ trust_level = "trusted"
             }
         })
         .await;
-        assert_eq!(exit, 0, "{output}");
+        let elevated_handoff = cfg!(windows)
+            && output.contains("start the Windows daemon from a non-elevated terminal");
+        assert_eq!(exit, i32::from(elevated_handoff), "{output}");
         assert!(!output.contains("The checkout was kept"), "{output}");
         let metrics = server
             .received_requests()
@@ -461,17 +491,57 @@ trust_level = "trusted"
             .context("requests")?
             .into_iter()
             .filter(|request| request.url.path() == "/metrics")
-            .flat_map(|request| request.body)
-            .collect::<Vec<_>>();
-        assert!(
-            if analytics {
-                String::from_utf8_lossy(&metrics).contains("codex.tui.start")
-            } else {
-                metrics.is_empty()
-            },
-            "analytics={analytics}, metrics_bytes={}",
-            metrics.len()
-        );
+            .map(|request| serde_json::from_slice::<Value>(&request.body))
+            .collect::<serde_json::Result<Vec<_>>>()?;
+        if analytics {
+            let exported = metrics
+                .iter()
+                .flat_map(|payload| payload["resourceMetrics"].as_array().into_iter().flatten())
+                .flat_map(|resource| resource["scopeMetrics"].as_array().into_iter().flatten())
+                .flat_map(|scope| scope["metrics"].as_array().into_iter().flatten())
+                .collect::<Vec<_>>();
+            let update = exported
+                .iter()
+                .find(|metric| metric["name"] == "codex.daemon.update")
+                .context("handoff metric")?;
+            let update_point = &update["sum"]["dataPoints"][0];
+            assert_eq!(update_point["asInt"], 1);
+            let point = exported
+                .iter()
+                .filter(|metric| metric["name"] == "codex.tui.start")
+                .flat_map(|metric| metric["sum"]["dataPoints"].as_array().into_iter().flatten())
+                .next()
+                .context("codex.tui.start data point")?;
+            let tags = point["attributes"]
+                .as_array()
+                .context("codex.tui.start attributes")?
+                .iter()
+                .map(|attribute| {
+                    Ok((
+                        attribute["key"].as_str().context("metric tag key")?,
+                        attribute["value"]["stringValue"]
+                            .as_str()
+                            .context("metric tag value")?,
+                    ))
+                })
+                .collect::<anyhow::Result<HashMap<_, _>>>()?;
+            assert_eq!(
+                tags,
+                HashMap::from([
+                    ("app_server_mode", "in_process"),
+                    ("terminal_name", "unknown"),
+                    ("multiplexer", "none"),
+                    ("daemon_selection_reason", "incompatible_option"),
+                    ("daemon_auto_start", "disabled"),
+                    ("auto_update", "enabled"),
+                    ("auto_update_setting", "default"),
+                    ("update_interval_setting", "default"),
+                    ("shutdown_grace_setting", "default"),
+                ])
+            );
+        } else {
+            assert!(metrics.is_empty(), "analytics disabled");
+        }
         let (body, checkout, metadata) = observed
             .with_context(|| {
                 format!(

@@ -260,6 +260,7 @@ define_runtime_action_bindings! {
         toggle_side_conversation,
     ],
     "chat" => Chat, chat, chat [
+        toggle_voice,
         interrupt_turn,
         decrease_reasoning_effort,
         increase_reasoning_effort,
@@ -396,8 +397,12 @@ define_runtime_action_bindings! {
         resume,
         search,
         new_task,
+        new_worktree,
         rename,
         stop,
+        archive,
+        delete,
+        hide,
         toggle_grouping,
     ],
     "approval" => Approval, approval, approval [

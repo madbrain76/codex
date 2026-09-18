@@ -1,17 +1,30 @@
 //! Trusted reasoning-effort updates follow surviving history and the next turn's selected settings.
 
+use codex_config::test_support::CloudConfigBundleFixture;
+use codex_core::ForkSnapshot;
+use codex_core::RecoverTurnRequest;
+use codex_core::StartIfIdleSubmission;
+use codex_core::StartThreadOptions;
+use codex_core::SuspendTurnOutcome;
+use codex_core::TurnInput;
+use codex_core::TurnInputRequest;
+use codex_core::TurnInputSubmission;
 use codex_core::config::Config;
-use codex_extension_api::ExtensionFuture;
-use codex_extension_api::ExtensionRegistryBuilder;
-use codex_extension_api::ThreadIdleInput;
-use codex_extension_api::ThreadLifecycleContributor;
 use codex_features::Feature;
+use codex_history::ResponseItemEnvelope;
+use codex_history::RolloutItem;
 use codex_login::CodexAuth;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::InternalSessionSource;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadSettingsOverrides;
+use codex_protocol::protocol::ThreadSource;
+use codex_protocol::user_input::UserInput;
 use core_test_support::responses;
 use core_test_support::responses::ResponsesRequest;
 use core_test_support::skip_if_no_network;
@@ -24,8 +37,6 @@ use serde_json::Value;
 use std::sync::Arc;
 use std::time::Duration;
 use test_case::test_case;
-use tokio::sync::Notify;
-use tokio::time::timeout;
 use wiremock::ResponseTemplate;
 
 fn override_builder() -> TestCodexBuilder {
@@ -63,6 +74,221 @@ fn message(role: &str, text: &str) -> Value {
         "role": role,
         "content": [{"type": "input_text", "text": text}],
     })
+}
+
+#[test_case(SessionSource::Internal(InternalSessionSource::Guardian); "internal guardian")]
+#[test_case(SessionSource::SubAgent(SubAgentSource::Other("guardian".to_string())); "legacy guardian")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sync_guardian_ignores_managed_reasoning_override(
+    session_source: SessionSource,
+) -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = responses::start_mock_server().await;
+    let mut mocks = Vec::new();
+    for id in [
+        "parent-medium",
+        "parent-high",
+        "reviewer-low",
+        "reviewer-high",
+    ] {
+        mocks.push(
+            responses::mount_sse_once(&server, responses::sse(vec![responses::ev_completed(id)]))
+                .await,
+        );
+    }
+    let mut test = override_builder()
+        .with_cloud_config_bundle(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                "[features]\nreasoning_effort_override = true\n",
+            ),
+        )
+        .with_config(|config| config.model_provider.supports_websockets = false)
+        .build_with_auto_env(&server)
+        .await?;
+    test.submit_text_turn("first parent turn").await?;
+    submit_thread_settings(
+        &test.codex,
+        ThreadSettingsOverrides {
+            effort: Some(Some(ReasoningEffort::High)),
+            ..Default::default()
+        },
+    )
+    .await?;
+    test.submit_text_turn("second parent turn").await?;
+    let parent = Arc::clone(&test.codex);
+    parent.shutdown_and_wait().await?;
+
+    // Fork real parent history, including its trusted effort updates, into a reviewer.
+    let config = test.config.clone();
+    assert!(config.features.enabled(Feature::ReasoningEffortOverride));
+    let mut options = StartThreadOptions::new(config);
+    options.session_source = Some(session_source);
+    options.thread_source = Some(ThreadSource::GuardianReview);
+    let forked = test
+        .thread_manager
+        .fork_thread(
+            ForkSnapshot::Interrupted,
+            options,
+            parent.rollout_path().expect("parent rollout path"),
+        )
+        .await?;
+    test.codex = forked.thread;
+    test.session_configured = forked.session_configured;
+    for effort in [ReasoningEffort::Low, ReasoningEffort::High] {
+        submit_thread_settings(
+            &test.codex,
+            ThreadSettingsOverrides {
+                effort: Some(Some(effort)),
+                ..Default::default()
+            },
+        )
+        .await?;
+        test.submit_text_turn("review an action").await?;
+    }
+    test.codex.shutdown_and_wait().await?;
+
+    let requests = mocks
+        .iter()
+        .map(responses::ResponseMock::single_request)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        requests
+            .iter()
+            .map(|request| request.body_json()["reasoning"]["effort"].clone())
+            .collect::<Vec<_>>(),
+        vec![
+            Value::from("medium"),
+            Value::from("medium"),
+            Value::from("low"),
+            Value::from("high"),
+        ],
+    );
+    let inherited_updates = vec![
+        effort_update(ReasoningEffort::Medium),
+        effort_update(ReasoningEffort::High),
+    ];
+    assert_eq!(
+        requests.iter().map(effort_updates).collect::<Vec<_>>(),
+        vec![
+            vec![effort_update(ReasoningEffort::Medium)],
+            inherited_updates.clone(),
+            vec![],
+            vec![],
+        ],
+    );
+    // Reviewers neither append new updates nor erase inherited durable history.
+    for thread in [&parent, &test.codex] {
+        let saved_updates = thread
+            .load_history(/*include_archived*/ false)
+            .await?
+            .items
+            .into_iter()
+            .filter_map(|item| match item {
+                RolloutItem::ResponseItem(ResponseItemEnvelope {
+                    item: item @ ResponseItem::ConfigurationUpdate { .. },
+                    ..
+                }) => Some(serde_json::to_value(item).expect("serialize saved update")),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(saved_updates, inherited_updates);
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reasoning_effort_override_recovery_reuses_trusted_tail_update() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = responses::start_mock_server().await;
+    // Keep the turn active without allowing any model output after the update.
+    responses::mount_response_once(
+        &server,
+        responses::sse_response(responses::sse(vec![responses::ev_completed("suspended")]))
+            .set_delay(Duration::from_secs(/*secs*/ 60)),
+    )
+    .await;
+    let builder = || {
+        override_builder().with_config(|config| {
+            config.model_reasoning_effort = Some(ReasoningEffort::High);
+            // Recovery must work without a prewarm establishing a runtime pin.
+            config.model_provider.supports_websockets = false;
+        })
+    };
+    let test = builder().build_with_auto_env(&server).await?;
+    let submission = test
+        .codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "recover this turn".to_string(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    let TurnInputSubmission::Started { turn_id } = submission else {
+        panic!("expected a new turn");
+    };
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::RawResponseItem(raw)
+            if matches!(&raw.item, ResponseItem::ConfigurationUpdate { .. }))
+    })
+    .await;
+    let thread_settings = test.codex.restorable_thread_settings().await;
+    assert_eq!(
+        test.codex.suspend_turn_and_shutdown().await?,
+        SuspendTurnOutcome::Suspended {
+            turn_id: turn_id.clone(),
+        },
+    );
+    let rollout_path = test.codex.rollout_path().expect("rollout path");
+    test.thread_manager
+        .remove_thread(&test.session_configured.thread_id)
+        .await
+        .expect("unload suspended thread");
+
+    let recovery_server = responses::start_mock_server().await;
+    let mock = responses::mount_sse_once(
+        &recovery_server,
+        responses::sse(vec![responses::ev_completed("recovered")]),
+    )
+    .await;
+    let cwd = test.config.cwd.clone();
+    let mut resume_builder = builder().with_config(move |config| config.cwd = cwd);
+    if let Some(url) = test.executor_environment().exec_server_url() {
+        resume_builder = resume_builder.with_exec_server_url(url);
+    }
+    let resumed = resume_builder
+        .resume(&recovery_server, Arc::clone(&test.home), rollout_path)
+        .await?;
+    resumed
+        .codex
+        .restore_thread_settings(thread_settings)
+        .await?;
+    assert_eq!(
+        resumed
+            .codex
+            .recover_turn_if_idle(RecoverTurnRequest {
+                turn_id: turn_id.clone(),
+                thread_settings: Default::default(),
+                trace: None,
+                cyber_access_program: None,
+            })
+            .await?,
+        StartIfIdleSubmission::Started { turn_id },
+    );
+    wait_for_event(&resumed.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let request = mock.single_request();
+    assert_eq!(
+        effort_updates(&request),
+        vec![effort_update(ReasoningEffort::High)]
+    );
+    assert_eq!(
+        request.input().last(),
+        Some(&effort_update(ReasoningEffort::High))
+    );
+    assert_eq!(request.body_json()["reasoning"]["effort"], "high");
+    Ok(())
 }
 
 #[test_case(ReasoningEffort::High; "high to persistent and back")]
@@ -270,11 +496,23 @@ async fn reasoning_effort_override_normalizes_ultra_before_comparing_updates(
     Ok(())
 }
 
-#[test_case(true; "feature enabled")]
-#[test_case(false; "feature disabled")]
+#[derive(Clone, Copy)]
+enum PrewarmStartup {
+    New,
+    Resume,
+    Fork,
+}
+
+#[test_case(true, PrewarmStartup::New; "new thread feature enabled")]
+#[test_case(false, PrewarmStartup::New; "new thread feature disabled")]
+#[test_case(true, PrewarmStartup::Resume; "resumed thread feature enabled")]
+#[test_case(false, PrewarmStartup::Resume; "resumed thread feature disabled")]
+#[test_case(true, PrewarmStartup::Fork; "forked thread feature enabled")]
+#[test_case(false, PrewarmStartup::Fork; "forked thread feature disabled")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn reasoning_effort_override_websocket_prewarm_preserves_baseline(
     feature_enabled: bool,
+    startup: PrewarmStartup,
 ) -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
     let server = responses::start_mock_server().await;
@@ -290,17 +528,62 @@ async fn reasoning_effort_override_websocket_prewarm_preserves_baseline(
     ]])
     .await;
     let base_url = format!("{}/v1", websocket.uri());
-    let test = override_builder()
-        .with_config(move |config| {
-            config.model_provider.base_url = Some(base_url);
-            config.model_provider.supports_websockets = true;
-            config
-                .features
-                .set_enabled(Feature::ReasoningEffortOverride, feature_enabled)
-                .expect("configure reasoning effort overrides");
-        })
-        .build_with_auto_env(&server)
-        .await?;
+    let configure_prewarm = move |config: &mut Config| {
+        config.model_provider.base_url = Some(base_url.clone());
+        config.model_provider.supports_websockets = true;
+        config
+            .features
+            .set_enabled(Feature::ReasoningEffortOverride, feature_enabled)
+            .expect("configure reasoning effort overrides");
+    };
+    let mut builder = override_builder().with_config(configure_prewarm.clone());
+    let test = if !matches!(startup, PrewarmStartup::New) {
+        let previous_mock = responses::mount_sse_once(
+            &server,
+            responses::sse(vec![responses::ev_completed("previous")]),
+        )
+        .await;
+        let mut previous = override_builder()
+            .with_config(|config| {
+                config
+                    .features
+                    .disable(Feature::ReasoningEffortOverride)
+                    .expect("disable reasoning effort overrides for source history");
+                config.model_provider.supports_websockets = false;
+            })
+            .build_with_auto_env(&server)
+            .await?;
+        previous.submit_text_turn("previous turn").await?;
+        assert_eq!(
+            previous_mock
+                .single_request()
+                .message_input_texts("user")
+                .last()
+                .map(String::as_str),
+            Some("previous turn"),
+        );
+        if matches!(startup, PrewarmStartup::Fork) {
+            previous.codex.shutdown_and_wait().await?;
+            let mut config = previous.config.clone();
+            configure_prewarm(&mut config);
+            let forked = previous
+                .thread_manager
+                .fork_thread(
+                    ForkSnapshot::Interrupted,
+                    codex_core::StartThreadOptions::new(config.clone()),
+                    previous.codex.rollout_path().expect("rollout path"),
+                )
+                .await?;
+            previous.codex = forked.thread;
+            previous.session_configured = forked.session_configured;
+            previous.config = config;
+            previous
+        } else {
+            builder.restart(&server, &previous).await?
+        }
+    } else {
+        builder.build_with_auto_env(&server).await?
+    };
     let warmup = tokio::time::timeout(
         std::time::Duration::from_secs(/*secs*/ 10),
         websocket.wait_for_request(/*connection_index*/ 0, /*request_index*/ 0),
@@ -435,6 +718,72 @@ async fn reasoning_effort_override_websocket_appends_then_replays_after_reconnec
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reasoning_effort_override_disabled_filters_websocket_history() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = responses::start_mock_server().await;
+    let initial_mock = responses::mount_sse_once(
+        &server,
+        responses::sse(vec![responses::ev_completed("initial")]),
+    )
+    .await;
+    let initial = override_builder().build_with_auto_env(&server).await?;
+    initial
+        .submit_text_turn("before disabling overrides")
+        .await?;
+    assert_eq!(
+        effort_updates(&initial_mock.single_request()),
+        vec![effort_update(ReasoningEffort::Medium)]
+    );
+    let websocket = responses::start_websocket_server(vec![vec![
+        vec![
+            responses::ev_response_created("warmup"),
+            responses::ev_completed("warmup"),
+        ],
+        vec![
+            responses::ev_response_created("resumed"),
+            responses::ev_completed("resumed"),
+        ],
+    ]])
+    .await;
+    let base_url = format!("{}/v1", websocket.uri());
+    let mut builder = override_builder().with_config(move |config| {
+        config
+            .features
+            .disable(Feature::ReasoningEffortOverride)
+            .expect("disable overrides");
+        config.model_reasoning_effort = Some(ReasoningEffort::High);
+        config.model_provider.base_url = Some(base_url);
+        config.model_provider.supports_websockets = true;
+    });
+    if let Some(url) = initial.executor_environment().exec_server_url() {
+        builder = builder.with_exec_server_url(url);
+    }
+    let test = builder.restart(&server, &initial).await?;
+    let warmup = tokio::time::timeout(
+        Duration::from_secs(/*secs*/ 10),
+        websocket.wait_for_request(/*connection_index*/ 0, /*request_index*/ 0),
+    )
+    .await?;
+    assert_eq!(warmup.body_json()["generate"], false);
+    test.submit_text_turn("after disabling overrides").await?;
+    let requests = websocket.single_connection();
+    assert_eq!(requests.len(), 2);
+    for request in requests {
+        let body = request.body_json();
+        assert_eq!(body["reasoning"]["effort"], "high");
+        assert!(
+            body["input"]
+                .as_array()
+                .expect("request input")
+                .iter()
+                .all(|item| item["type"] != "configuration_update")
+        );
+    }
+    websocket.shutdown().await;
+    Ok(())
+}
+
 #[derive(Clone, Copy)]
 enum OverrideUnavailable {
     FeatureDisabled,
@@ -498,54 +847,80 @@ async fn reasoning_effort_override_unavailable_uses_request_effort(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn reasoning_effort_override_disabled_on_resume_retires_update_at_compaction()
--> anyhow::Result<()> {
+async fn reasoning_effort_override_disabled_recovers_saved_history() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
     let server = responses::start_mock_server().await;
-    let mut mocks = Vec::new();
-    for (id, reply) in [
-        ("initial", "initial reply"),
-        ("resumed", "resumed reply"),
-        ("after", "after compaction reply"),
-    ] {
-        mocks.push(
-            responses::mount_sse_once(
-                &server,
-                responses::sse(vec![
-                    responses::ev_assistant_message(id, reply),
-                    responses::ev_completed(id),
-                ]),
-            )
-            .await,
-        );
-    }
-    let compact = responses::mount_compact_json_once(
+    let reply = |id, text| {
+        responses::sse(vec![
+            responses::ev_assistant_message(id, text),
+            responses::ev_completed(id),
+        ])
+    };
+    let mock = responses::mount_sse_sequence(
         &server,
-        serde_json::json!({
-            "output": [{"type": "compaction", "encrypted_content": "compacted-history"}]
-        }),
+        vec![
+            reply("initial", "initial reply"),
+            reply("resumed", "resumed reply"),
+            responses::sse(vec![
+                serde_json::json!({
+                    "type": "response.output_item.done",
+                    "item": {"type": "compaction", "encrypted_content": "compacted-history"},
+                }),
+                responses::ev_completed("compact"),
+            ]),
+            reply("after", "after compaction reply"),
+        ],
     )
     .await;
     let initial = override_builder().build_with_auto_env(&server).await?;
-    initial.submit_text_turn("before resume").await?;
+    let agent_message = serde_json::from_value(serde_json::json!({
+        "type": "agent_message",
+        "author": "/root/worker",
+        "recipient": "/root",
+        "content": [{"type": "input_text", "text": "The worker has finished."}],
+    }))?;
+    let submission = initial
+        .codex
+        .start_turn_if_idle(TurnInputRequest::new(TurnInput::ResponseItem(
+            agent_message,
+        )))
+        .await?;
+    assert!(matches!(submission, StartIfIdleSubmission::Started { .. }));
+    wait_for_event(&initial.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
     let chatgpt_base_url = format!("{}/backend-api", server.uri());
-    let resumed = override_builder()
+    let mut builder = override_builder()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(move |config| {
             config
                 .features
                 .disable(Feature::ReasoningEffortOverride)
                 .expect("disable overrides");
-            config
-                .features
-                .disable(Feature::RemoteCompactionV2)
-                .expect("disable remote compaction v2");
             config.model_reasoning_effort = Some(ReasoningEffort::High);
             config.chatgpt_base_url = chatgpt_base_url;
-        })
-        .restart(&server, &initial)
-        .await?;
+        });
+    if let Some(url) = initial.executor_environment().exec_server_url() {
+        builder = builder.with_exec_server_url(url);
+    }
+    let resumed = builder.restart(&server, &initial).await?;
     resumed.submit_text_turn("after resume").await?;
+    let saved_updates = resumed
+        .codex
+        .load_history(/*include_archived*/ false)
+        .await?
+        .items
+        .into_iter()
+        .filter_map(|item| match item {
+            RolloutItem::ResponseItem(ResponseItemEnvelope {
+                item: item @ ResponseItem::ConfigurationUpdate { .. },
+                ..
+            }) => Some(serde_json::to_value(item).expect("serialize saved update")),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(saved_updates, vec![effort_update(ReasoningEffort::Medium)]);
     resumed.codex.submit(Op::Compact).await?;
     wait_for_event(&resumed.codex, |event| {
         matches!(event, EventMsg::TurnComplete(_))
@@ -553,12 +928,12 @@ async fn reasoning_effort_override_disabled_on_resume_retires_update_at_compacti
     .await;
     resumed.submit_text_turn("after compaction").await?;
 
-    let requests = [
-        mocks[0].single_request(),
-        mocks[1].single_request(),
-        compact.single_request(),
-        mocks[2].single_request(),
-    ];
+    let requests = mock.requests();
+    assert_eq!(
+        requests[1].inputs_of_type("agent_message"),
+        requests[0].inputs_of_type("agent_message")
+    );
+    assert_eq!(requests[1].inputs_of_type("agent_message").len(), 1);
     assert_eq!(
         requests
             .iter()
@@ -572,14 +947,8 @@ async fn reasoning_effort_override_disabled_on_resume_retires_update_at_compacti
                 Value::from("medium"),
                 vec![effort_update(ReasoningEffort::Medium)]
             ),
-            (
-                Value::from("high"),
-                vec![effort_update(ReasoningEffort::Medium)]
-            ),
-            (
-                Value::from("high"),
-                vec![effort_update(ReasoningEffort::Medium)]
-            ),
+            (Value::from("high"), Vec::new()),
+            (Value::from("high"), Vec::new()),
             (Value::from("high"), Vec::new()),
         ],
     );
@@ -588,124 +957,6 @@ async fn reasoning_effort_override_disabled_on_resume_retires_update_at_compacti
             .input()
             .iter()
             .any(|item| item["type"] == "compaction")
-    );
-    Ok(())
-}
-
-#[test_case(1, ReasoningEffort::High; "later turn keep changed selection")]
-#[test_case(1, ReasoningEffort::Medium; "later turn match restored settings")]
-#[test_case(2, ReasoningEffort::High; "through first turn")]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn reasoning_effort_override_rollback_reestablishes_selected_effort(
-    num_turns: u32,
-    effort: ReasoningEffort,
-) -> anyhow::Result<()> {
-    skip_if_no_network!(Ok(()));
-    #[derive(Default)]
-    struct ThreadIdle {
-        ready: Notify,
-    }
-
-    impl ThreadLifecycleContributor<Config> for ThreadIdle {
-        fn on_thread_idle<'a>(&'a self, _input: ThreadIdleInput<'a>) -> ExtensionFuture<'a, ()> {
-            Box::pin(async move {
-                self.ready.notify_one();
-            })
-        }
-    }
-
-    let idle = Arc::new(ThreadIdle::default());
-    let mut extensions = ExtensionRegistryBuilder::new();
-    extensions.thread_lifecycle_contributor(idle.clone());
-    let server = responses::start_mock_server().await;
-    let first = responses::mount_sse_once(
-        &server,
-        responses::sse(vec![responses::ev_completed("first")]),
-    )
-    .await;
-    let removed = responses::mount_sse_once(
-        &server,
-        responses::sse(vec![responses::ev_completed("removed")]),
-    )
-    .await;
-    let replacement = responses::mount_sse_once(
-        &server,
-        responses::sse(vec![responses::ev_completed("replacement")]),
-    )
-    .await;
-    let test = override_builder()
-        .with_extensions(Arc::new(extensions.build()))
-        .build_with_auto_env(&server)
-        .await?;
-    test.submit_text_turn("first turn").await?;
-    timeout(Duration::from_secs(/*secs*/ 10), idle.ready.notified()).await?;
-    submit_thread_settings(
-        &test.codex,
-        ThreadSettingsOverrides {
-            effort: Some(Some(ReasoningEffort::High)),
-            ..Default::default()
-        },
-    )
-    .await?;
-    test.submit_text_turn("removed turn").await?;
-    // Completion can be delivered before the active slot is cleared. Wait for
-    // actual idle so this test exercises effort replay, not rollback admission.
-    timeout(Duration::from_secs(/*secs*/ 10), idle.ready.notified()).await?;
-    test.codex.submit(Op::ThreadRollback { num_turns }).await?;
-    let rollback = wait_for_event(&test.codex, |event| {
-        matches!(event, EventMsg::ThreadRolledBack(_) | EventMsg::Error(_))
-    })
-    .await;
-    let EventMsg::ThreadRolledBack(rollback) = rollback else {
-        panic!("rollback failed: {rollback:?}");
-    };
-    assert_eq!(rollback.num_turns, num_turns);
-    submit_thread_settings(
-        &test.codex,
-        ThreadSettingsOverrides {
-            effort: Some(Some(effort.clone())),
-            ..Default::default()
-        },
-    )
-    .await?;
-    test.submit_text_turn("replacement turn").await?;
-    timeout(Duration::from_secs(/*secs*/ 10), idle.ready.notified()).await?;
-
-    assert_eq!(
-        effort_updates(&first.single_request()),
-        [effort_update(ReasoningEffort::Medium)]
-    );
-    assert_eq!(
-        effort_updates(&removed.single_request()),
-        [
-            effort_update(ReasoningEffort::Medium),
-            effort_update(ReasoningEffort::High)
-        ]
-    );
-    let request = replacement.single_request();
-    assert_eq!(request.body_json()["reasoning"]["effort"], effort.as_str());
-    let mut expected = if num_turns == 1 {
-        vec![effort_update(ReasoningEffort::Medium)]
-    } else {
-        Vec::new()
-    };
-    expected.push(effort_update(effort.clone()));
-    assert_eq!(effort_updates(&request), expected);
-    let input = request.input();
-    assert!(
-        !input
-            .iter()
-            .any(|item| item["content"][0]["text"] == "removed turn")
-    );
-    let tail = responses::strip_response_item_ids_from_json(responses::strip_metadata_from_json(
-        Value::Array(input[input.len() - 2..].to_vec()),
-    ));
-    assert_eq!(
-        tail,
-        serde_json::json!([
-            message("user", "replacement turn"),
-            effort_update(effort.clone()),
-        ])
     );
     Ok(())
 }
@@ -832,125 +1083,9 @@ async fn reasoning_effort_override_resume_refreshes_selected_effort(
     Ok(())
 }
 
-#[test_case(false; "success")]
-#[test_case(true; "failure")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn reasoning_effort_override_remote_v1_compaction_uses_pin(
-    fail_compaction: bool,
-) -> anyhow::Result<()> {
-    skip_if_no_network!(Ok(()));
-    let server = responses::start_mock_server().await;
-    let first = responses::mount_sse_once(
-        &server,
-        responses::sse(vec![responses::ev_completed("first")]),
-    )
-    .await;
-    let after = responses::mount_sse_once(
-        &server,
-        responses::sse(vec![responses::ev_completed("after")]),
-    )
-    .await;
-    let unchanged = responses::mount_sse_once(
-        &server,
-        responses::sse(vec![responses::ev_completed("unchanged")]),
-    )
-    .await;
-    let changed = responses::mount_sse_once(
-        &server,
-        responses::sse(vec![responses::ev_completed("changed")]),
-    )
-    .await;
-    let compact = responses::mount_compact_response_once(
-        &server,
-        if fail_compaction {
-            ResponseTemplate::new(400).set_body_json(serde_json::json!({
-                "error": {"code": "invalid_request_error", "message": "compaction failed"}
-            }))
-        } else {
-            ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "output": [{"type": "compaction", "encrypted_content": "compacted-history"}]
-            }))
-        },
-    )
-    .await;
-    let chatgpt_base_url = format!("{}/backend-api", server.uri());
-    let test = override_builder()
-        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
-        .with_config(move |config| {
-            config.chatgpt_base_url = chatgpt_base_url;
-            config
-                .features
-                .disable(Feature::RemoteCompactionV2)
-                .expect("disable remote compaction v2");
-        })
-        .build_with_auto_env(&server)
-        .await?;
-    test.submit_text_turn("first").await?;
-    submit_thread_settings(
-        &test.codex,
-        ThreadSettingsOverrides {
-            effort: Some(Some(ReasoningEffort::High)),
-            ..Default::default()
-        },
-    )
-    .await?;
-    test.codex.submit(Op::Compact).await?;
-    if fail_compaction {
-        wait_for_event(&test.codex, |event| matches!(event, EventMsg::Error(_))).await;
-    }
-    wait_for_event(&test.codex, |event| {
-        matches!(event, EventMsg::TurnComplete(_))
-    })
-    .await;
-    test.submit_text_turn("after compaction").await?;
-    test.submit_text_turn("unchanged effort").await?;
-    submit_thread_settings(
-        &test.codex,
-        ThreadSettingsOverrides {
-            effort: Some(Some(ReasoningEffort::Low)),
-            ..Default::default()
-        },
-    )
-    .await?;
-    test.submit_text_turn("changed effort").await?;
-    let medium = effort_update(ReasoningEffort::Medium);
-    let after_updates = if fail_compaction {
-        vec![medium.clone(), effort_update(ReasoningEffort::High)]
-    } else {
-        Vec::new()
-    };
-    let mut changed_updates = after_updates.clone();
-    changed_updates.push(effort_update(ReasoningEffort::Low));
-    let after_effort = Value::from(if fail_compaction { "medium" } else { "high" });
-    assert_eq!(
-        [
-            first.single_request(),
-            compact.single_request(),
-            after.single_request(),
-            unchanged.single_request(),
-            changed.single_request(),
-        ]
-        .map(|request| (
-            request.body_json()["reasoning"]["effort"].clone(),
-            effort_updates(&request),
-        )),
-        [
-            (Value::from("medium"), vec![medium.clone()]),
-            (Value::from("medium"), vec![medium]),
-            (after_effort.clone(), after_updates.clone()),
-            (after_effort.clone(), after_updates),
-            (after_effort, changed_updates),
-        ],
-    );
-    Ok(())
-}
-
-#[test_case(false; "remote v1")]
-#[test_case(true; "remote v2")]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn reasoning_effort_override_compaction_fallback_uses_each_models_effort(
-    remote_v2: bool,
-) -> anyhow::Result<()> {
+async fn reasoning_effort_override_compaction_fallback_uses_each_models_effort()
+-> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
     let server = responses::start_mock_server().await;
     let first = responses::mount_sse_once(
@@ -969,30 +1104,17 @@ async fn reasoning_effort_override_compaction_fallback_uses_each_models_effort(
     let failure = ResponseTemplate::new(/*s*/ 400).set_body_json(serde_json::json!({
         "error": {"message": "previous model cannot compact this history"}
     }));
-    let compactions = if remote_v2 {
-        responses::mount_response_sequence(
-            &server,
-            vec![
-                failure,
-                responses::sse_response(responses::sse(vec![
-                    serde_json::json!({"type": "response.output_item.done", "item": compaction}),
-                    responses::ev_completed("fallback"),
-                ])),
-            ],
-        )
-        .await
-    } else {
-        responses::mount_compact_response_sequence(
-            &server,
-            vec![
-                failure,
-                ResponseTemplate::new(/*s*/ 200).set_body_json(serde_json::json!({
-                    "output": [compaction]
-                })),
-            ],
-        )
-        .await
-    };
+    let compactions = responses::mount_response_sequence(
+        &server,
+        vec![
+            failure,
+            responses::sse_response(responses::sse(vec![
+                serde_json::json!({"type": "response.output_item.done", "item": compaction}),
+                responses::ev_completed("fallback"),
+            ])),
+        ],
+    )
+    .await;
     let after = responses::mount_sse_once(
         &server,
         responses::sse(vec![responses::ev_completed("after")]),
@@ -1012,17 +1134,6 @@ async fn reasoning_effort_override_compaction_fallback_uses_each_models_effort(
         .with_config(move |config| {
             config.chatgpt_base_url = chatgpt_base_url;
             config.model_provider.stream_max_retries = Some(0);
-            if remote_v2 {
-                config
-                    .features
-                    .enable(Feature::RemoteCompactionV2)
-                    .expect("enable remote compaction v2");
-            } else {
-                config
-                    .features
-                    .disable(Feature::RemoteCompactionV2)
-                    .expect("disable remote compaction v2");
-            }
         })
         .build_with_auto_env(&server)
         .await?;
