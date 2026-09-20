@@ -44,16 +44,15 @@ use crate::render::highlight::foreground_style_for_scopes;
 use crate::render::highlight::foreground_style_for_scopes_with_theme;
 use crate::render::highlight::highlight_code_to_lines;
 use crate::render::line_utils::line_to_static;
+use crate::style::accent_color;
 use crate::style::table_separator_style;
 use crate::terminal_hyperlinks::HyperlinkLine;
-use crate::terminal_hyperlinks::annotate_web_urls_in_line;
 use crate::terminal_hyperlinks::remap_wrapped_line;
 use crate::terminal_hyperlinks::visible_lines;
 use crate::terminal_hyperlinks::web_destination;
 use crate::width::char_width;
 use crate::width::display_width;
 use crate::wrapping::RtOptions;
-use crate::wrapping::adaptive_wrap_line;
 use crate::wrapping::word_wrap_line;
 use pulldown_cmark::Alignment;
 use pulldown_cmark::CodeBlockKind;
@@ -87,6 +86,7 @@ use local_links::should_render_local_link_label;
 pub(crate) use streaming::StreamingMarkdownRender;
 pub(crate) use streaming::render_streaming_markdown_lines_with_width_and_cwd;
 pub(crate) use web_links::hide_web_link_destination;
+use web_links::style_bare_web_urls;
 
 const TABLE_COLUMN_GAP: usize = 2;
 const TABLE_CELL_PADDING: usize = 1;
@@ -132,13 +132,13 @@ impl MarkdownStyles {
                     "markup.raw.inline.markdown",
                 ],
             )
-            .unwrap_or_else(|| Style::new().cyan()),
+            .unwrap_or_else(|| Style::new().fg(accent_color())),
             emphasis: Style::new().italic(),
             strong: Style::new().bold(),
             strikethrough: Style::new().crossed_out(),
-            ordered_list_marker: Style::new().light_blue(),
+            ordered_list_marker: Style::new().fg(accent_color()),
             unordered_list_marker: Style::new(),
-            link: Style::new().cyan().underlined(),
+            link: Style::new().fg(accent_color()).underlined(),
             blockquote: Style::new().green(),
         }
     }
@@ -1115,7 +1115,7 @@ where
         } else if self.link.is_some() || self.in_code_block {
             HyperlinkLine::new(Line::from(span))
         } else {
-            annotate_web_urls_in_line(Line::from(span))
+            style_bare_web_urls(span, self.styles.link)
         };
         if let Some(table_state) = self.table_state.as_mut()
             && let Some(cell) = table_state.current_cell.as_mut()
@@ -1993,15 +1993,19 @@ where
                 let opts = RtOptions::new(width)
                     .initial_indent(self.current_initial_indent.clone().into())
                     .subsequent_indent(self.current_subsequent_indent.clone().into());
-                let wrapped = adaptive_wrap_line(&line.line, opts)
-                    .into_iter()
-                    .map(|wrapped| line_to_static(&wrapped))
-                    .collect();
-                for wrapped in remap_wrapped_line(&line, wrapped) {
+                for wrapped in crate::terminal_hyperlinks::adaptive_wrap_hyperlink_lines(
+                    std::slice::from_ref(&line),
+                    opts,
+                ) {
                     self.push_output_line(wrapped.style(style));
                 }
             } else {
                 let mut spans = self.current_initial_indent.clone();
+                let mut source =
+                    crate::terminal_hyperlinks::LogicalLineSource::from_line(&line.line);
+                source.prefix_bytes = spans.iter().map(|span| span.content.len()).sum();
+                source.continuation_indent = self.current_subsequent_indent.clone().into();
+                line.source = Some(source);
                 let shift = Self::spans_display_width(&spans);
                 spans.append(&mut line.line.spans);
                 for hyperlink in &mut line.hyperlinks {
@@ -2119,7 +2123,7 @@ where
         } else if self.link.is_some() || self.in_code_block {
             HyperlinkLine::new(Line::from(span))
         } else {
-            annotate_web_urls_in_line(Line::from(span))
+            style_bare_web_urls(span, self.styles.link)
         };
         self.push_annotated(annotated);
     }
@@ -2181,6 +2185,7 @@ mod markdown_render_tests {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use ratatui::style::Stylize;
     use ratatui::text::Text;
 
     fn lines_to_strings(text: &Text<'_>) -> Vec<String> {
@@ -2258,9 +2263,19 @@ mod tests {
 
     #[test]
     fn wraps_blockquotes() {
-        let markdown = "> block quote with content that should wrap nicely";
-        let rendered = render_markdown_text_with_width(markdown, Some(22));
-        let lines = lines_to_strings(&rendered);
+        let markdown = "> block quote with **content** that should wrap nicely";
+        let rendered =
+            render_markdown_lines_with_width_and_cwd(markdown, Some(22), /*cwd*/ None);
+        let source = rendered[0].source.as_ref().expect("blockquote source");
+        assert_eq!(
+            source.styled_range(0..source.text.len()),
+            Line::from(vec![
+                "block quote with ".green(),
+                "content".green().bold(),
+                " that should wrap nicely".green(),
+            ])
+        );
+        let lines: Vec<_> = rendered.iter().map(|line| line.line.to_string()).collect();
         assert_eq!(
             lines,
             vec![
@@ -2333,7 +2348,13 @@ mod tests {
         // extracted (first word / comma-separated token) so highlighting works.
         for info in &["rust,no_run", "rust no_run", "rust title=\"demo\""] {
             let markdown = format!("```{info}\nfn main() {{}}\n```\n");
-            let rendered = render_markdown_text(&markdown);
+            let rendered = crate::terminal_palette::with_test_default_colors(
+                crate::terminal_probe::DefaultColors {
+                    fg: (220, 220, 220),
+                    bg: (20, 20, 20),
+                },
+                || render_markdown_text(&markdown),
+            );
             let has_rgb = rendered.lines.iter().any(|line| {
                 line.spans
                     .iter()
