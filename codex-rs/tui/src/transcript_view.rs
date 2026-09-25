@@ -3,6 +3,7 @@
 //! The app owns history and pagination. This view owns only reading/selection state and bounded
 //! layout caches. Anchors address content inside an entry, so prepending history never renumbers
 //! them and rewrapping does not turn a reading position into an unrelated screen row.
+//! Recap tail spacing is reserved by layout and never enters selectable cell content.
 
 mod activity;
 mod bookmark;
@@ -83,9 +84,11 @@ struct VisibleRow {
 
 /// Shared scrolling and interaction state for compact and detailed transcript presentations.
 pub(crate) struct TranscriptView {
+    pub(crate) copy_on_select: bool,
     position: Position,
     follow_control: follow_control::FollowControl,
     copy_feedback: Option<composer_gap::CopyFeedback>,
+    composer_tip: Option<(Rect, HyperlinkLine)>,
     cache: LayoutCache,
     live: Option<Arc<TextLayout>>,
     live_separated: Option<Arc<TextLayout>>,
@@ -112,9 +115,11 @@ pub(crate) struct TranscriptView {
 impl Default for TranscriptView {
     fn default() -> Self {
         Self {
+            copy_on_select: false,
             position: Position::Latest,
             follow_control: follow_control::FollowControl::default(),
             copy_feedback: None,
+            composer_tip: None,
             cache: LayoutCache::default(),
             live: None,
             live_separated: None,
@@ -142,6 +147,7 @@ impl Default for TranscriptView {
 
 impl TranscriptView {
     pub(crate) fn render(&mut self, area: Rect, buf: &mut Buffer, cells: &[Arc<dyn HistoryCell>]) {
+        self.composer_tip = None;
         self.cache.begin_frame();
         self.sync_history_tail(cells);
         let current_cells = cells;
@@ -502,7 +508,20 @@ impl TranscriptView {
         let height = self
             .layout(cells, last)
             .map_or(/*default*/ 0, |l| l.row_count());
-        self.move_rows(cells, last, height, -(self.area.height as isize))
+        let recap_gap = usize::from(
+            self.area.height > 1
+                && !has_live
+                && cells.last().is_some_and(|cell| {
+                    cell.as_any()
+                        .is::<crate::history_cell::ThreadRecapHistoryCell>()
+                }),
+        );
+        self.move_rows(
+            cells,
+            last,
+            height + recap_gap,
+            -(self.area.height as isize),
+        )
     }
 
     fn move_rows(
@@ -572,3 +591,11 @@ impl TranscriptView {
 #[cfg(test)]
 #[path = "transcript_view_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "transcript_view/markdown_copy_tests.rs"]
+mod markdown_copy_tests;
+
+#[cfg(test)]
+#[path = "transcript_view/copy_on_select_tests.rs"]
+mod copy_on_select_tests;

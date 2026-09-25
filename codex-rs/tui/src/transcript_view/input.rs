@@ -1,5 +1,8 @@
 //! Transcript gestures leave ordinary typing and composer editing with the existing input path.
 //! Stationary link clicks open on release; dragging or scrolling keeps the gesture in selection.
+//! Shift-click extends the existing selection from its original text unit.
+//! Optional automatic copying happens only when a nonempty mouse selection is released.
+//! Automatic copies retain the selection; explicit copies clear it after confirmed delivery.
 
 use crate::key_hint::KeyBindingListExt;
 use crossterm::event::KeyCode;
@@ -16,6 +19,7 @@ use super::*;
 pub(crate) enum ViewAction {
     Changed,
     Copy(String),
+    CopyOnSelect(String),
     CopyAndFollow(String),
     OpenLink(String),
 }
@@ -181,6 +185,21 @@ impl TranscriptView {
         if let Some(action) = self.handle_follow_control_mouse(event) {
             return Some(action);
         }
+        if event.kind == MouseEventKind::Down(MouseButton::Left)
+            && event
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::SUPER)
+            && let Some((area, tip)) = &self.composer_tip
+            && area.contains(ScreenPosition::new(event.column, event.row))
+        {
+            let column = usize::from(event.column - area.x);
+            return tip
+                .hyperlinks
+                .iter()
+                .find(|link| link.columns.contains(&column))?
+                .terminal_destination()
+                .map(ViewAction::OpenLink);
+        }
         let inside = self
             .area
             .contains(ScreenPosition::new(event.column, event.row));
@@ -242,11 +261,17 @@ impl TranscriptView {
                     self.extend_selection(event.column, event.row);
                 }
                 self.end_drag();
-                if self.selected_text(cells).is_none() {
+                let selected = self.selected_text(cells);
+                if selected.is_none() {
                     self.end_selection(cells);
                 }
                 if let Some(link) = link {
                     return Some(ViewAction::OpenLink(link));
+                }
+                if self.copy_on_select
+                    && let Some(text) = selected.filter(|text| !text.is_empty())
+                {
+                    return Some(ViewAction::CopyOnSelect(text));
                 }
             }
             _ => return None,
@@ -337,6 +362,15 @@ impl TranscriptView {
                 .layout
                 .link_at(visible.row, event.column.saturating_sub(self.area.x))
                 .map(ViewAction::OpenLink);
+        }
+        if event.modifiers == KeyModifiers::SHIFT && self.has_selection_range() {
+            self.last_click = None;
+            self.extend_selection(event.column, event.row);
+            if let Some(selection) = &mut self.selection {
+                selection.dragging = true;
+                selection.pressed_link = None;
+            }
+            return Some(ViewAction::Changed);
         }
         let clicks =
             crate::text_selection::click_count(&mut self.last_click, event.column, event.row);

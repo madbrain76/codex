@@ -126,6 +126,7 @@ fn plugins_config_input_with_requirements(
         /*remote_plugin_enabled*/ false,
         String::new(),
         test_http_client_factory(),
+        /*product_sku*/ None,
     )
 }
 
@@ -166,6 +167,7 @@ fn curated_repo_sync_stays_deferred_for_remote_chatgpt_catalog() {
         /*remote_plugin_enabled*/ true,
         "https://chatgpt.com".to_string(),
         test_http_client_factory(),
+        /*product_sku*/ None,
     );
     let manager = Arc::new(test_plugins_manager_with_options(
         tmp.path().to_path_buf(),
@@ -855,6 +857,7 @@ fn remote_installed_plugin_in_marketplace(
     marketplace_name: &str,
 ) -> RemoteInstalledPlugin {
     RemoteInstalledPlugin {
+        extensions: None,
         canonical_app_id: None,
         marketplace_name: marketplace_name.to_string(),
         id: format!("plugins~Plugin_{name}"),
@@ -978,7 +981,9 @@ async fn load_plugins_loads_default_skills_and_mcp_servers() {
                     environment_id: "local".to_string(),
                     enabled: true,
                     required: false,
+                    startup_readiness: Default::default(),
                     supports_parallel_tool_calls: false,
+                    tool_input_schema_max_bytes: None,
                     omit_tools_from: None,
                     disabled_reason: None,
                     startup_timeout_sec: None,
@@ -1080,7 +1085,9 @@ enabled = true
                 environment_id: "local".to_string(),
                 enabled: true,
                 required: false,
+                startup_readiness: Default::default(),
                 supports_parallel_tool_calls: false,
+                tool_input_schema_max_bytes: None,
                 omit_tools_from: None,
                 disabled_reason: None,
                 startup_timeout_sec: None,
@@ -2183,7 +2190,9 @@ async fn load_plugins_uses_manifest_configured_component_paths() {
                     environment_id: "local".to_string(),
                     enabled: true,
                     required: false,
+                    startup_readiness: Default::default(),
                     supports_parallel_tool_calls: false,
+                    tool_input_schema_max_bytes: None,
                     omit_tools_from: None,
                     disabled_reason: None,
                     startup_timeout_sec: None,
@@ -2522,7 +2531,9 @@ async fn load_plugins_ignores_manifest_component_paths_without_dot_slash() {
                 environment_id: "local".to_string(),
                 enabled: true,
                 required: false,
+                startup_readiness: Default::default(),
                 supports_parallel_tool_calls: false,
+                tool_input_schema_max_bytes: None,
                 omit_tools_from: None,
                 disabled_reason: None,
                 startup_timeout_sec: None,
@@ -2777,7 +2788,9 @@ fn capability_index_filters_inactive_and_zero_capability_plugins() {
         environment_id: "local".to_string(),
         enabled: true,
         required: false,
+        startup_readiness: Default::default(),
         supports_parallel_tool_calls: false,
+        tool_input_schema_max_bytes: None,
         omit_tools_from: None,
         disabled_reason: None,
         startup_timeout_sec: None,
@@ -2969,6 +2982,7 @@ async fn plugin_cache_reuses_effective_configurations() {
             /*remote_plugin_enabled*/ false,
             "https://chatgpt.com".to_string(),
             test_http_client_factory(),
+            /*product_sku*/ None,
         )
     };
     let manager = test_plugins_manager(codex_home.path().to_path_buf());
@@ -3233,6 +3247,7 @@ async fn plugins_for_config_discards_in_flight_load_after_account_change() {
         /*remote_plugin_enabled*/ true,
         String::new(),
         test_http_client_factory(),
+        /*product_sku*/ None,
     );
     let auth_manager = test_auth_manager(Some(AuthMode::ChatgptAuthTokens));
     let manager = Arc::new(test_plugins_manager_with_auth_manager(
@@ -7182,6 +7197,7 @@ fn remote_installed_plugins_cache_refresh_coalesces_materializations() {
             service_config: RemotePluginServiceConfig::new(
                 "https://example.com".to_string(),
                 test_http_client_factory(),
+                /*product_sku*/ None,
             ),
             auth: None,
             notify: RemoteInstalledPluginsCacheRefreshNotify::IfCacheChanged,
