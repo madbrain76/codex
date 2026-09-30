@@ -188,7 +188,6 @@ fn convert_configured_marketplace_plugin_to_plugin_summary(
 ) -> PluginSummary {
     let share_context = share_context_for_source(&plugin.source, shared_plugin_ids_by_local_path);
     PluginSummary {
-        extensions: None,
         id: plugin.id,
         remote_plugin_id: None,
         version: None,
@@ -1123,7 +1122,6 @@ impl PluginRequestProcessor {
                     marketplace_name: outcome.marketplace_name,
                     marketplace_path: outcome.marketplace_path,
                     summary: PluginSummary {
-                        extensions: None,
                         id: outcome.plugin.id,
                         remote_plugin_id: None,
                         version: None,
@@ -1956,6 +1954,7 @@ impl PluginRequestProcessor {
                     McpServerOauthLoginCompletedNotification {
                         name: notification_name,
                         thread_id: None,
+                        login_id: None,
                         success,
                         error,
                     },
@@ -2181,7 +2180,6 @@ fn remote_marketplace_to_info(marketplace: RemoteMarketplace) -> PluginMarketpla
 
 fn remote_plugin_summary_to_info(summary: RemoteCatalogPluginSummary) -> PluginSummary {
     PluginSummary {
-        extensions: summary.extensions,
         id: summary.id,
         remote_plugin_id: Some(summary.remote_plugin_id),
         version: summary.version,

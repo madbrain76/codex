@@ -16,6 +16,7 @@ use codex_mcp::McpServerSource;
 use codex_mcp::McpStartupPolicy;
 use codex_mcp::PreparedMcpCall;
 use codex_mcp::ToolInfo;
+use codex_otel::auth_storage::AuthStorageOriginator;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 use std::collections::HashSet;
 
@@ -262,7 +263,7 @@ impl Session {
                     registered.insert(name.clone());
                     catalog
                         .get_or_insert_with(|| projection.config.mcp_server_catalog.to_builder())
-                        .register(McpServerRegistration::from_config(name, server));
+                        .register(McpServerRegistration::from_executor_config(name, server));
                 }
             }
 
@@ -300,7 +301,9 @@ impl Session {
             ready_selected_capability_roots,
             elicitation_reviewer,
         );
-        self.services.mcp_runtime.replace(input).await;
+        AuthStorageOriginator::from_client_name(&desired.originator)
+            .scope(self.services.mcp_runtime.replace(input))
+            .await;
         self.services.thread_extension_data.insert(selected_plugins);
     }
 
