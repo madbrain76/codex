@@ -3387,6 +3387,7 @@ fn latest_token_usage_record_stops_at_compaction_checkpoint() {
         usage: TokenUsage::default(),
         turn_token_usage: TokenUsage::default(),
         thread_token_usage: TokenUsage::default(),
+        timing: None,
     };
     let checkpoint = |latest_token_usage_record| {
         RolloutItem::Compacted(CompactedItem {
@@ -4006,6 +4007,7 @@ async fn start_new_context_window_persists_checkpoint_state() {
         usage: TokenUsage::default(),
         turn_token_usage: TokenUsage::default(),
         thread_token_usage: TokenUsage::default(),
+        timing: None,
     };
     session.state.lock().await.latest_token_usage_record = Some(token_usage_record.clone());
     let step_context = session

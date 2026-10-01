@@ -60,6 +60,7 @@ use crate::tools::router::ToolSuggestPresentation;
 use crate::tools::spec_plan::build_tool_router;
 use crate::tools::spec_plan::tool_suggest_enabled;
 use crate::turn_diff_tracker::TurnDiffTracker;
+use crate::turn_timing::ResponseTimingCapture;
 use crate::turn_timing::record_turn_ttft_metric;
 use crate::util::error_or_panic;
 use codex_analytics::AppInvocation;
@@ -1691,6 +1692,7 @@ async fn run_sampling_request(
             Arc::clone(&turn_diff_tracker),
             &prompt,
             cancellation_token.child_token(),
+            retry_state.retry_count(),
         )
         .await
         {
@@ -2532,6 +2534,7 @@ async fn try_run_sampling_request(
     turn_diff_tracker: SharedTurnDiffTracker,
     prompt: &Prompt,
     cancellation_token: CancellationToken,
+    retry_count: u32,
 ) -> CodexResult<SamplingRequestResult> {
     let turn_context = Arc::clone(&step_context.turn);
     feedback_tags!(
@@ -2569,6 +2572,9 @@ async fn try_run_sampling_request(
     let effort = sess
         .reasoning_effort_for_request(&step_context.settings, super::RequestEffortUsage::Sampling)
         .await;
+    // This capture begins at dispatch, not at turn start. A turn can have
+    // multiple requests separated by tool work or retry backoff.
+    let mut response_timing = ResponseTimingCapture::start();
     let mut stream = client_session
         .stream(
             prompt,
@@ -2676,6 +2682,7 @@ async fn try_run_sampling_request(
             .session_telemetry
             .record_responses(&handle_responses, &event);
         record_turn_ttft_metric(&turn_context, &event).await;
+        response_timing.observe(&event);
 
         match event {
             ResponseEvent::Created { response_id } => {
@@ -2977,6 +2984,7 @@ async fn try_run_sampling_request(
                     &response_id,
                     token_usage.as_ref(),
                     usage_metadata.as_ref(),
+                    Some(response_timing.complete(retry_count)),
                 )
                 .await;
                 let budget_result = sess

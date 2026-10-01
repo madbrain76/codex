@@ -13,6 +13,7 @@ use std::time::UNIX_EPOCH;
 use super::TurnProfilePhase;
 use super::TurnProfileState;
 use super::TurnTimingState;
+use super::ResponseTimingCapture;
 use super::response_item_records_turn_ttft;
 use crate::ResponseEvent;
 
@@ -201,6 +202,32 @@ fn response_item_records_turn_ttft_ignores_empty_non_output_items() {
             internal_chat_message_metadata_passthrough: None,
         }
     ));
+}
+
+#[test]
+fn response_timing_capture_records_semantic_generation_only() {
+    let mut tool_only = ResponseTimingCapture::start();
+    tool_only.observe(&ResponseEvent::OutputItemDone(ResponseItem::FunctionCall {
+        id: None,
+        name: "shell".to_string(),
+        namespace: None,
+        arguments: "{}".to_string(),
+        call_id: "call-1".to_string(),
+        encrypted_function_args: None,
+        internal_chat_message_metadata_passthrough: None,
+    }));
+    let tool_only_timing = tool_only.complete(2);
+    assert_eq!(tool_only_timing.time_to_first_generation_ms, None);
+    assert_eq!(tool_only_timing.generation_duration_ms, None);
+    assert_eq!(tool_only_timing.retry_count, 2);
+    assert!(tool_only_timing.request_duration_ms.is_some());
+
+    let mut text = ResponseTimingCapture::start();
+    text.observe(&ResponseEvent::OutputTextDelta("hello".to_string()));
+    let text_timing = text.complete(0);
+    assert!(text_timing.time_to_first_generation_ms.is_some());
+    assert!(text_timing.generation_duration_ms.is_some());
+    assert!(text_timing.first_generation_event_at_ms.is_some());
 }
 
 #[test]

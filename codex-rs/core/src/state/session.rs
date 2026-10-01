@@ -24,6 +24,7 @@ use codex_history::ResponseItemEnvelope;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::RateLimitSnapshot;
+use codex_protocol::protocol::ResponseTiming;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::TokenUsageRecord;
@@ -220,6 +221,7 @@ impl SessionState {
         root_turn_id: String,
         response_id: String,
         usage: &TokenUsage,
+        timing: Option<ResponseTiming>,
     ) -> TokenUsageRecord {
         let mut turn_token_usage = self
             .latest_token_usage_record
@@ -245,6 +247,7 @@ impl SessionState {
             usage: usage.clone(),
             turn_token_usage,
             thread_token_usage,
+            timing,
         };
         self.latest_token_usage_record = Some(record.clone());
         record

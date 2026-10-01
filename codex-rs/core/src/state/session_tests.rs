@@ -28,6 +28,7 @@ async fn record_token_usage_continues_restored_totals() {
         usage: usage(30),
         turn_token_usage: usage(30),
         thread_token_usage: usage(230),
+        timing: None,
     });
     let after_resume = restored.record_token_usage(
         thread_id,
@@ -36,6 +37,7 @@ async fn record_token_usage_continues_restored_totals() {
         "root-turn".to_string(),
         "response-d".to_string(),
         &usage(20),
+        None,
     );
     assert_eq!(
         after_resume,
@@ -48,8 +50,30 @@ async fn record_token_usage_continues_restored_totals() {
             usage: usage(20),
             turn_token_usage: usage(50),
             thread_token_usage: usage(250),
+            timing: None,
         }
     );
+}
+
+#[test]
+fn token_usage_record_without_timing_deserializes_as_historical_data() {
+    let thread_id = ThreadId::new();
+    let record = TokenUsageRecord {
+        thread_id,
+        turn_id: "turn".to_string(),
+        session_id: SessionId::from(thread_id),
+        root_turn_id: "turn".to_string(),
+        response_id: "response".to_string(),
+        usage: TokenUsage::default(),
+        turn_token_usage: TokenUsage::default(),
+        thread_token_usage: TokenUsage::default(),
+        timing: None,
+    };
+    let json = serde_json::to_string(&record).expect("token usage record should serialize");
+    assert!(!json.contains("timing"));
+    let restored: TokenUsageRecord =
+        serde_json::from_str(&json).expect("historical token usage record should deserialize");
+    assert_eq!(restored.timing, None);
 }
 
 #[tokio::test]

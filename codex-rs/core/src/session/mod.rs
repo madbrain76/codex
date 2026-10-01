@@ -97,6 +97,7 @@ use codex_otel::current_span_w3c_trace_context;
 use codex_otel::set_parent_from_w3c_trace_context;
 use codex_prompts::render_model_instructions;
 use codex_protocol::ResponseUsageMetadata;
+use codex_protocol::protocol::ResponseTiming;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::ElicitationRequest;
@@ -4716,6 +4717,7 @@ impl Session {
         response_id: &str,
         usage: Option<&TokenUsage>,
         usage_metadata: Option<&ResponseUsageMetadata>,
+        timing: Option<ResponseTiming>,
     ) {
         self.send_event(
             turn_context,
@@ -4739,6 +4741,7 @@ impl Session {
                 .unwrap_or_else(|| turn_context.sub_id.clone()),
             response_id.to_string(),
             usage,
+            timing,
         );
         self.persist_rollout_items(&[RolloutItem::TokenUsageRecord(record)])
             .await;

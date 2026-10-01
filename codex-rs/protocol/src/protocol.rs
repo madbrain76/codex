@@ -2261,6 +2261,31 @@ pub struct TokenUsage {
 
 /// Best-effort Responses API usage observed for one completed response.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct ResponseTiming {
+    /// Wall-clock request start, retained only to correlate a response with logs.
+    #[ts(type = "number | null")]
+    pub request_started_at_ms: Option<i64>,
+    /// Wall-clock first semantic generation event, when the provider streamed one.
+    #[ts(type = "number | null")]
+    pub first_generation_event_at_ms: Option<i64>,
+    /// Wall-clock completion time.
+    #[ts(type = "number | null")]
+    pub completed_at_ms: Option<i64>,
+    /// Client-observed time from dispatch until the first semantic generated event.
+    #[ts(type = "number | null")]
+    pub time_to_first_generation_ms: Option<i64>,
+    /// Client-observed time from the first semantic generated event until completion.
+    #[ts(type = "number | null")]
+    pub generation_duration_ms: Option<i64>,
+    /// Client-observed time from dispatch until completion.
+    #[ts(type = "number | null")]
+    pub request_duration_ms: Option<i64>,
+    /// Failed stream attempts before this completed response.
+    #[ts(type = "number")]
+    pub retry_count: u32,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 pub struct TokenUsageRecord {
     pub thread_id: ThreadId,
     pub turn_id: String,
@@ -2270,6 +2295,9 @@ pub struct TokenUsageRecord {
     pub usage: TokenUsage,
     pub turn_token_usage: TokenUsage,
     pub thread_token_usage: TokenUsage,
+    /// Response-scoped client timings. Absent for historical rollouts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timing: Option<ResponseTiming>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]

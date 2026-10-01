@@ -10,6 +10,7 @@ use codex_analytics::TurnProfile;
 use codex_otel::TURN_TTFM_DURATION_METRIC;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::ResponseTiming;
 use tokio::sync::Mutex;
 
 use crate::ResponseEvent;
@@ -84,6 +85,56 @@ pub(crate) struct TurnProfileTimingGuard {
     timing: Arc<TurnTimingState>,
     phase: TurnProfilePhase,
     active: bool,
+}
+
+/// Ephemeral timing state for one outbound response request.
+///
+/// This must remain separate from `TurnTimingState`: a turn may issue multiple
+/// requests with tool work, retries, or compaction between them.
+#[derive(Debug)]
+pub(crate) struct ResponseTimingCapture {
+    request_started_at: Instant,
+    request_started_at_ms: i64,
+    first_generation_at: Option<Instant>,
+    first_generation_at_ms: Option<i64>,
+}
+
+impl ResponseTimingCapture {
+    pub(crate) fn start() -> Self {
+        Self {
+            request_started_at: Instant::now(),
+            request_started_at_ms: now_unix_timestamp_ms(),
+            first_generation_at: None,
+            first_generation_at_ms: None,
+        }
+    }
+
+    pub(crate) fn observe(&mut self, event: &ResponseEvent) {
+        if self.first_generation_at.is_none() && response_event_records_semantic_generation(event) {
+            self.first_generation_at = Some(Instant::now());
+            self.first_generation_at_ms = Some(now_unix_timestamp_ms());
+        }
+    }
+
+    pub(crate) fn complete(self, retry_count: u32) -> ResponseTiming {
+        let completed_at = Instant::now();
+        let request_duration_ms = duration_ms(completed_at, self.request_started_at);
+        let time_to_first_generation_ms = self
+            .first_generation_at
+            .map(|first_generation_at| duration_ms(first_generation_at, self.request_started_at));
+        let generation_duration_ms = self
+            .first_generation_at
+            .map(|first_generation_at| duration_ms(completed_at, first_generation_at));
+        ResponseTiming {
+            request_started_at_ms: Some(self.request_started_at_ms),
+            first_generation_event_at_ms: self.first_generation_at_ms,
+            completed_at_ms: Some(now_unix_timestamp_ms()),
+            time_to_first_generation_ms,
+            generation_duration_ms,
+            request_duration_ms: Some(request_duration_ms),
+            retry_count,
+        }
+    }
 }
 
 impl TurnTimingState {
@@ -222,6 +273,10 @@ pub(crate) fn now_unix_timestamp_ms() -> i64 {
 
 fn duration_to_u64_ms(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+}
+
+fn duration_ms(later: Instant, earlier: Instant) -> i64 {
+    i64::try_from(later.saturating_duration_since(earlier).as_millis()).unwrap_or(i64::MAX)
 }
 
 impl TurnProfileState {
@@ -399,6 +454,29 @@ fn response_event_records_turn_ttft(event: &ResponseEvent) -> bool {
     }
 }
 
+fn response_event_records_semantic_generation(event: &ResponseEvent) -> bool {
+    match event {
+        ResponseEvent::OutputItemDone(item) | ResponseEvent::OutputItemAdded(item) => {
+            response_item_records_semantic_generation(item)
+        }
+        ResponseEvent::OutputTextDelta(_)
+        | ResponseEvent::ReasoningSummaryDelta { .. }
+        | ResponseEvent::ReasoningSummaryDone { .. }
+        | ResponseEvent::ReasoningContentDelta { .. } => true,
+        ResponseEvent::Created { .. }
+        | ResponseEvent::ServerModel(_)
+        | ResponseEvent::ModelVerifications(_)
+        | ResponseEvent::TurnModerationMetadata(_)
+        | ResponseEvent::SafetyBuffering(_)
+        | ResponseEvent::ServerReasoningIncluded(_)
+        | ResponseEvent::ToolCallInputDelta { .. }
+        | ResponseEvent::Completed { .. }
+        | ResponseEvent::ReasoningSummaryPartAdded { .. }
+        | ResponseEvent::RateLimits(_)
+        | ResponseEvent::ModelsEtag(_) => false,
+    }
+}
+
 fn response_item_records_turn_ttft(item: &ResponseItem) -> bool {
     match item {
         ResponseItem::Message { .. } => {
@@ -431,6 +509,30 @@ fn response_item_records_turn_ttft(item: &ResponseItem) -> bool {
         | ResponseItem::ContextCompaction { .. } => true,
         ResponseItem::ConfigurationUpdate { .. } | ResponseItem::CompactionTrigger { .. } => false,
         ResponseItem::AdditionalTools { .. }
+        | ResponseItem::FunctionCallOutput { .. }
+        | ResponseItem::CustomToolCallOutput { .. }
+        | ResponseItem::ToolSearchOutput { .. }
+        | ResponseItem::Other => false,
+    }
+}
+
+fn response_item_records_semantic_generation(item: &ResponseItem) -> bool {
+    match item {
+        ResponseItem::Message { .. } | ResponseItem::Reasoning { .. } => {
+            response_item_records_turn_ttft(item)
+        }
+        ResponseItem::AgentMessage { .. }
+        | ResponseItem::LocalShellCall { .. }
+        | ResponseItem::FunctionCall { .. }
+        | ResponseItem::CustomToolCall { .. }
+        | ResponseItem::ToolSearchCall { .. }
+        | ResponseItem::WebSearchCall { .. }
+        | ResponseItem::ImageGenerationCall { .. }
+        | ResponseItem::Compaction { .. }
+        | ResponseItem::ContextCompaction { .. }
+        | ResponseItem::ConfigurationUpdate { .. }
+        | ResponseItem::CompactionTrigger { .. }
+        | ResponseItem::AdditionalTools { .. }
         | ResponseItem::FunctionCallOutput { .. }
         | ResponseItem::CustomToolCallOutput { .. }
         | ResponseItem::ToolSearchOutput { .. }

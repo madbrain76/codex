@@ -45,6 +45,13 @@ impl Default for ResponsesStreamRetryState {
     }
 }
 
+impl ResponsesStreamRetryState {
+    /// Failed sampling attempts that preceded the next successful response.
+    pub(crate) fn retry_count(&self) -> u32 {
+        u32::try_from(self.retries.saturating_add(self.connection_retries)).unwrap_or(u32::MAX)
+    }
+}
+
 /// Server retry advice retained after stream retries are exhausted. The turn ID
 /// prevents a reused Guardian session from applying advice from an earlier review.
 pub(crate) struct ExhaustedResponseRetry {
