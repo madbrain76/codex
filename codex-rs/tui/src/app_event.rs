@@ -279,6 +279,11 @@ pub(crate) struct AgentsOverviewThreadRefresh {
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, IntoStaticStr)]
 pub(crate) enum AppEvent {
+    SecuritySetupLoaded {
+        request_id: uuid::Uuid,
+        identity: crate::security_setup::Identity,
+        notice: crate::security_setup::Notice,
+    },
     OpenDaemonMenu,
     ConfirmDaemonUpdate(crate::update_action::DaemonUpdateSource),
     RunDaemonUpdate(crate::update_action::DaemonUpdateSource),
@@ -306,6 +311,14 @@ pub(crate) enum AppEvent {
         cwd: Option<AbsolutePathBuf>,
     },
     AgentsOverviewWorktreeCreated(Result<crate::app::PendingWorktree, String>),
+    /// Fork the selected dashboard conversation and open the new session.
+    ForkAgentsOverviewThread {
+        thread_id: ThreadId,
+    },
+    /// Run the existing fork action after selection events have been processed.
+    ForkAgentsOverviewThreadReady {
+        thread_id: ThreadId,
+    },
     /// Rename a task directly from the shared dashboard.
     RenameAgentsOverviewThread {
         thread_id: ThreadId,
