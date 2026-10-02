@@ -16,7 +16,7 @@ If you want Codex in your code editor (VS Code, Cursor, Windsurf), <a href="http
 Install this fork's latest passing Linux x86_64 build with:
 
 ```shell
-curl -fsSL https://raw.githubusercontent.com/madbrain76/codex/feat/enter-auto-submit/scripts/install/install-fork.sh | sh
+curl -fsSL https://raw.githubusercontent.com/madbrain76/codex/main/scripts/install/install-fork.sh | sh
 codex
 ```
 

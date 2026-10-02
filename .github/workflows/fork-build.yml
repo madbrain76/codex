@@ -64,7 +64,7 @@ jobs:
           if-no-files-found: error
           retention-days: 14
       - name: Publish latest fork release
-        if: github.event_name == 'push' && github.repository == 'madbrain76/codex' && github.ref == 'refs/heads/feat/enter-auto-submit'
+        if: github.event_name == 'push' && github.repository == 'madbrain76/codex' && github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
