@@ -40,8 +40,10 @@ jobs:
           key: fork-build-linux-${{ hashFiles('codex-rs/Cargo.lock') }}
       - name: Check formatting
         run: cargo fmt -- --config imports_granularity=Item --check
-      - name: Run focused CLI tests
-        run: cargo test -p codex-cli
+      - name: Run focused CLI and core tests
+        run: |
+          cargo test -p codex-cli
+          cargo test -p codex-core
       - name: Build release CLI
         run: cargo build --release -p codex-cli --bin codex
       - name: Upload Linux CLI
