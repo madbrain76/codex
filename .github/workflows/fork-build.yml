@@ -52,7 +52,9 @@ jobs:
             --skip sandbox_fetches_and_enforces_cloud_managed_permission_profile \
             --skip daemon_handoff_uses_selected_executable_and_propagates_failure \
             --skip packaged_daemon_bootstrap_seeds_local_package
-          cargo test -p codex-core
+          # This tracing assertion depends on the runner's test-log subscriber.
+          cargo test -p codex-core -- \
+            --skip session::turn::tests::post_sampling_token_estimate_is_disabled_by_always_on_sinks
       - name: Build release CLI
         run: cargo build --release -p codex-cli --bin codex
       - name: Upload Linux CLI
