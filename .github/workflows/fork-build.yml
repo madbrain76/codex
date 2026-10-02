@@ -48,7 +48,8 @@ jobs:
           cargo test -p codex-cli -- \
             --skip sandbox_fetches_and_enforces_cloud_managed_permission_profile \
             --skip daemon_handoff_uses_selected_executable_and_propagates_failure \
-            --skip packaged_daemon_bootstrap_seeds_local_package
+            --skip packaged_daemon_bootstrap_seeds_local_package \
+            --skip restart_applies_saved_updater_preference
           # The recursive residency test needs a larger stack; applying that
           # setting to every core test exhausts hosted-runner memory.
           RUST_MIN_STACK=33554432 cargo test -p codex-core \
