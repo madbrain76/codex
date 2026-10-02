@@ -22,7 +22,9 @@ codex
 
 The installer downloads the release asset published by this fork's
 [GitHub Actions workflow](../../actions/workflows/fork-build.yml) and installs
-it to `~/.local/bin` (or `CODEX_INSTALL_DIR`). To use it through the local
+the complete managed package under `~/.codex`, then links `codex` into
+`~/.local/bin` (or `CODEX_INSTALL_DIR`). This includes the companion binaries
+required by the background server and code mode. To use it through the local
 launcher without installing it globally:
 
 ```shell
@@ -57,9 +59,10 @@ You can also use Codex with an API key, but this requires [additional setup](htt
 
 ## This fork
 
-This fork tracks OpenAI's stable Codex release tags rather than `openai/main`,
-so its builds retain an official version number. To bring the fork forward and
-publish the resulting branch from the Codex checkout:
+This fork tracks OpenAI's stable Codex release tags rather than `openai/main`.
+Its packages append `-madbrain` to the matching upstream version (for example,
+`0.160.0-madbrain`) so `codex --version` identifies the custom build. To bring
+the fork forward and publish the resulting branch from the Codex checkout:
 
 ```bash
 scripts/update-from-release.sh
@@ -75,9 +78,9 @@ scripts/update-from-release.sh rust-v0.160.0
 ```
 
 Publishing pushes only this Codex fork. GitHub's `fork-build` workflow checks
-formatting, runs deterministic CLI and core tests, builds the release CLI, and
-uploads its Linux artifact. Download that artifact and point `CODEX_BIN` at it
-to use it with the local launcher.
+formatting, runs deterministic CLI and core tests, builds a complete standalone
+package, and uploads its Linux artifact. Download that artifact and point
+`CODEX_BIN` at its `bin/codex` executable to use it with the local launcher.
 
 The companion `cdx` checkout is intentionally local-only and is never pushed
 by this procedure. Its aliases can generate the Codex route map with `cdx
