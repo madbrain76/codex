@@ -41,9 +41,6 @@ jobs:
       - name: Check formatting
         run: cargo fmt -- --config imports_granularity=Item --check
       - name: Run focused CLI and core tests
-        env:
-          # The core residency tests exercise a deeply recursive eviction path.
-          RUST_MIN_STACK: 33554432
         run: |
           # Three integration tests require capabilities unavailable on GitHub-hosted
           # runners: bubblewrap's user namespace, replacing a running binary, and
@@ -52,8 +49,13 @@ jobs:
             --skip sandbox_fetches_and_enforces_cloud_managed_permission_profile \
             --skip daemon_handoff_uses_selected_executable_and_propagates_failure \
             --skip packaged_daemon_bootstrap_seeds_local_package
+          # The recursive residency test needs a larger stack; applying that
+          # setting to every core test exhausts hosted-runner memory.
+          RUST_MIN_STACK=33554432 cargo test -p codex-core \
+            interrupted_v2_agent_is_lost_after_residency_eviction
           # This tracing assertion depends on the runner's test-log subscriber.
           cargo test -p codex-core -- \
+            --skip interrupted_v2_agent_is_lost_after_residency_eviction \
             --skip session::turn::tests::post_sampling_token_estimate_is_disabled_by_always_on_sinks
       - name: Build release CLI
         run: cargo build --release -p codex-cli --bin codex
