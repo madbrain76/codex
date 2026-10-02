@@ -13,55 +13,40 @@ If you want Codex in your code editor (VS Code, Cursor, Windsurf), <a href="http
 
 ### Installing and running Codex CLI
 
-Run the following on Mac or Linux to install Codex CLI:
+This fork's tested build is the Linux CLI artifact from its
+[GitHub Actions workflow](../../actions/workflows/fork-build.yml). Open the
+latest successful run, download the `codex-linux-x86_64-<commit>` artifact,
+then install the extracted `codex` binary:
+
+```shell
+install -Dm755 codex ~/.local/bin/codex
+codex
+```
+
+Alternatively, leave the artifact anywhere convenient and use it through the
+local launcher:
+
+```shell
+CODEX_BIN=/path/to/codex cdx <alias>
+```
+
+The workflow currently publishes a Linux x86_64 artifact. For another platform,
+[build from source](./docs/install.md) in this fork rather than using an
+upstream installer.
+
+<details>
+<summary>Install unmodified upstream Codex instead</summary>
+
+These commands deliberately install OpenAI's official, unmodified build—not
+this fork:
 
 ```shell
 curl -fsSL https://chatgpt.com/codex/install.sh | sh
 ```
 
-Run the following on Windows to install Codex CLI:
-
-```shell
-powershell -ExecutionPolicy ByPass -c "irm https://chatgpt.com/codex/install.ps1 | iex"
-```
-
-The standalone installers download from `https://releases.openai.com/codex` by default and fall back to GitHub Releases if a metadata or asset download is unavailable. To force GitHub Releases, set `CODEX_INSTALLER_USE_RELEASES_OPENAI_COM` to `false` (`0` and `no` are also accepted):
-
-```shell
-curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_INSTALLER_USE_RELEASES_OPENAI_COM=false sh
-```
-
 ```powershell
-$env:CODEX_INSTALLER_USE_RELEASES_OPENAI_COM='false'; irm https://chatgpt.com/codex/install.ps1 | iex
+irm https://chatgpt.com/codex/install.ps1 | iex
 ```
-
-Codex CLI can also be installed via the following package managers:
-
-```shell
-# Install using npm
-npm install -g @openai/codex
-```
-
-```shell
-# Install using Homebrew
-brew install --cask codex
-```
-
-Then simply run `codex` to get started.
-
-<details>
-<summary>You can also go to the <a href="https://github.com/openai/codex/releases/latest">latest GitHub Release</a> and download the appropriate binary for your platform.</summary>
-
-Each GitHub Release contains many executables, but in practice, you likely want one of these:
-
-- macOS
-  - Apple Silicon/arm64: `codex-aarch64-apple-darwin.tar.gz`
-  - x86_64 (older Mac hardware): `codex-x86_64-apple-darwin.tar.gz`
-- Linux
-  - x86_64: `codex-x86_64-unknown-linux-musl.tar.gz`
-  - arm64: `codex-aarch64-unknown-linux-musl.tar.gz`
-
-Each archive contains a single entry with the platform baked into the name (e.g., `codex-x86_64-unknown-linux-musl`), so you likely want to rename it to `codex` after extracting it.
 
 </details>
 
