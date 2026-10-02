@@ -71,20 +71,14 @@ impl ChatWidget {
                         && !self.only_user_shell_commands_running()
                         && !user_message.text.starts_with('!')
                     {
-                        let queued_count = self.input_queue.queued_user_messages.len();
-                        self.queue_user_message(user_message);
-                        if self.input_queue.queued_user_messages.len() > queued_count
-                            && !self.input_queue.auto_submit_after_interrupt
-                        {
-                            self.input_queue.auto_submit_after_interrupt = true;
-                            if self.submit_op(AppCommand::interrupt()) {
-                                self.pause_active_goal_for_interrupt();
-                            } else {
-                                self.input_queue.auto_submit_after_interrupt = false;
-                                if let Some(composer) = self.pop_latest_queued_composer_state() {
-                                    self.restore_composer_state(composer);
-                                }
-                            }
+                        // `user_turn` uses Core's start-or-steer path. Submit immediately so
+                        // the active turn receives this as additional context; only an explicit
+                        // interrupt (for example Ctrl+C) may cancel the user's task.
+                        if !self.submit_user_message_with_history_record(
+                            user_message.clone(),
+                            UserMessageHistoryRecord::UserMessageText,
+                        ) {
+                            self.restore_user_message_to_composer(user_message);
                         }
                         return;
                     }

@@ -277,6 +277,19 @@ pub(super) fn next_submit_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op
     }
 }
 
+/// Return the next user submission while asserting that no interrupt was sent first.
+pub(super) fn next_steer_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) -> Op {
+    loop {
+        match op_rx.try_recv() {
+            Ok(op @ Op::UserTurn { .. }) => return op,
+            Ok(Op::Interrupt) => panic!("unexpected interrupt before same-turn steer"),
+            Ok(_) => continue,
+            Err(TryRecvError::Empty) => panic!("expected a steer op but queue was empty"),
+            Err(TryRecvError::Disconnected) => panic!("expected steer op but channel closed"),
+        }
+    }
+}
+
 pub(super) fn next_interrupt_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) {
     loop {
         match op_rx.try_recv() {

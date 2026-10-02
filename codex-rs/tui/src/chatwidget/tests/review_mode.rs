@@ -470,8 +470,8 @@ async fn steer_enter_queues_while_plan_stream_is_active() {
 }
 
 #[tokio::test]
-async fn enter_queues_message_and_auto_submits_after_interrupt() {
-    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+async fn enter_submits_an_immediate_same_turn_steer() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.thread_id = Some(ThreadId::new());
     chat.on_task_started();
 
@@ -480,14 +480,10 @@ async fn enter_queues_message_and_auto_submits_after_interrupt() {
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
     assert!(chat.bottom_pane.composer_is_empty());
-    assert_eq!(chat.input_queue.queued_user_messages.len(), 1);
-    assert!(chat.input_queue.pending_steers.is_empty());
-    assert!(chat.input_queue.auto_submit_after_interrupt);
-    next_interrupt_op(&mut op_rx);
-    assert_no_submit_op(&mut op_rx);
-
-    handle_turn_interrupted(&mut chat, "turn-1");
-    match next_submit_op(&mut op_rx) {
+    assert!(chat.input_queue.queued_user_messages.is_empty());
+    assert_eq!(chat.input_queue.pending_steers.len(), 1);
+    assert!(!chat.input_queue.auto_submit_after_interrupt);
+    match next_steer_op(&mut op_rx) {
         Op::UserTurn { items, .. } => assert_eq!(
             items,
             vec![UserInput::Text {
@@ -497,22 +493,13 @@ async fn enter_queues_message_and_auto_submits_after_interrupt() {
         ),
         other => panic!("expected Op::UserTurn, got {other:?}"),
     }
-    assert!(chat.input_queue.queued_user_messages.is_empty());
-    assert!(chat.input_queue.pending_steers.is_empty());
-    assert!(!chat.input_queue.auto_submit_after_interrupt);
+    assert_eq!(chat.input_queue.pending_steers.len(), 1);
 
-    let history = drain_insert_history(&mut rx)
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>();
-    insta::assert_snapshot!(lines_to_single_string(&history), @r"
-› queued while running
-");
 }
 
 #[tokio::test]
-async fn enter_interrupts_while_final_answer_stream_is_active() {
-    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+async fn enter_steers_while_final_answer_stream_is_active() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.thread_id = Some(ThreadId::new());
     chat.on_task_started();
     // Keep the assistant stream open (no commit tick/finalize) to model the repro window:
@@ -527,14 +514,10 @@ async fn enter_interrupts_while_final_answer_stream_is_active() {
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
     assert!(chat.bottom_pane.composer_is_empty());
-    assert_eq!(chat.input_queue.queued_user_messages.len(), 1);
-    assert!(chat.input_queue.pending_steers.is_empty());
-    assert!(chat.input_queue.auto_submit_after_interrupt);
-    next_interrupt_op(&mut op_rx);
-    assert_no_submit_op(&mut op_rx);
-
-    handle_turn_interrupted(&mut chat, "turn-1");
-    match next_submit_op(&mut op_rx) {
+    assert!(chat.input_queue.queued_user_messages.is_empty());
+    assert_eq!(chat.input_queue.pending_steers.len(), 1);
+    assert!(!chat.input_queue.auto_submit_after_interrupt);
+    match next_steer_op(&mut op_rx) {
         Op::UserTurn { items, .. } => assert_eq!(
             items,
             vec![UserInput::Text {
@@ -544,13 +527,11 @@ async fn enter_interrupts_while_final_answer_stream_is_active() {
         ),
         other => panic!("expected Op::UserTurn, got {other:?}"),
     }
-    assert!(chat.input_queue.queued_user_messages.is_empty());
-    assert!(chat.input_queue.pending_steers.is_empty());
-    let _ = drain_insert_history(&mut rx);
+    assert_eq!(chat.input_queue.pending_steers.len(), 1);
 }
 
 #[tokio::test]
-async fn enter_restores_message_when_interrupt_cannot_be_enqueued() {
+async fn enter_restores_message_when_immediate_steer_cannot_be_enqueued() {
     let (mut chat, _rx, op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.thread_id = Some(ThreadId::new());
     chat.on_task_started();
@@ -566,7 +547,7 @@ async fn enter_restores_message_when_interrupt_cannot_be_enqueued() {
 }
 
 #[tokio::test]
-async fn repeated_enter_queues_every_message_without_waiting_for_events() {
+async fn repeated_enter_submits_every_message_as_an_immediate_steer() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.thread_id = Some(ThreadId::new());
     chat.on_task_started();
@@ -578,21 +559,10 @@ async fn repeated_enter_queues_every_message_without_waiting_for_events() {
         assert!(chat.bottom_pane.composer_is_empty());
     }
 
-    assert_eq!(
-        chat.input_queue
-            .queued_user_messages
-            .iter()
-            .map(|message| message.text.as_str())
-            .collect::<Vec<_>>(),
-        vec!["first message", "second message"]
-    );
-    assert!(chat.input_queue.pending_steers.is_empty());
-    assert!(chat.input_queue.auto_submit_after_interrupt);
-    next_interrupt_op(&mut op_rx);
-    assert_no_submit_op(&mut op_rx);
-
-    handle_turn_interrupted(&mut chat, "turn-1");
-    match next_submit_op(&mut op_rx) {
+    assert!(chat.input_queue.queued_user_messages.is_empty());
+    assert_eq!(chat.input_queue.pending_steers.len(), 2);
+    assert!(!chat.input_queue.auto_submit_after_interrupt);
+    match next_steer_op(&mut op_rx) {
         Op::UserTurn { items, .. } => assert_eq!(
             items,
             vec![UserInput::Text {
@@ -602,11 +572,7 @@ async fn repeated_enter_queues_every_message_without_waiting_for_events() {
         ),
         other => panic!("expected Op::UserTurn, got {other:?}"),
     }
-    assert_eq!(chat.input_queue.queued_user_messages.len(), 1);
-
-    handle_turn_started(&mut chat, "turn-2");
-    handle_turn_completed(&mut chat, "turn-2", /*duration_ms*/ None);
-    match next_submit_op(&mut op_rx) {
+    match next_steer_op(&mut op_rx) {
         Op::UserTurn { items, .. } => assert_eq!(
             items,
             vec![UserInput::Text {
@@ -617,6 +583,7 @@ async fn repeated_enter_queues_every_message_without_waiting_for_events() {
         other => panic!("expected Op::UserTurn, got {other:?}"),
     }
     assert!(chat.input_queue.queued_user_messages.is_empty());
+    assert_eq!(chat.input_queue.pending_steers.len(), 2);
 }
 
 #[tokio::test]
