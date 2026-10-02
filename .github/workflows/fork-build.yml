@@ -41,6 +41,9 @@ jobs:
       - name: Check formatting
         run: cargo fmt -- --config imports_granularity=Item --check
       - name: Run focused CLI and core tests
+        env:
+          # The core residency tests exercise a deeply recursive eviction path.
+          RUST_MIN_STACK: 33554432
         run: |
           # Three integration tests require capabilities unavailable on GitHub-hosted
           # runners: bubblewrap's user namespace, replacing a running binary, and
