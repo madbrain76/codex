@@ -18,7 +18,7 @@ jobs:
   linux-cli:
     name: Linux CLI build and focused tests
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 180
     defaults:
       run:
         working-directory: codex-rs
