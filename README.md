@@ -20,7 +20,7 @@ curl -fsSL https://raw.githubusercontent.com/madbrain76/codex/main/scripts/insta
 codex
 ```
 
-The installer downloads the release asset published by this fork’s
+The installer downloads the release asset published by this fork's
 [GitHub Actions workflow](../../actions/workflows/fork-build.yml) and installs
 it to `~/.local/bin` (or `CODEX_INSTALL_DIR`). To use it through the local
 launcher without installing it globally:
@@ -36,7 +36,7 @@ installer.
 <details>
 <summary>Install unmodified upstream Codex instead</summary>
 
-These commands deliberately install OpenAI's official, unmodified build—not
+These commands deliberately install OpenAI's official, unmodified build--not
 this fork:
 
 ```shell
