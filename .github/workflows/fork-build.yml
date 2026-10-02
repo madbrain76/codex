@@ -50,11 +50,10 @@ jobs:
             --skip daemon_handoff_uses_selected_executable_and_propagates_failure \
             --skip packaged_daemon_bootstrap_seeds_local_package \
             --skip restart_applies_saved_updater_preference
-          # Recursive residency unit tests need a larger stack. The core
-          # library suite is deterministic; long-running integration scenarios
-          # are exercised outside this fast fork build gate.
-          RUST_MIN_STACK=33554432 cargo test -p codex-core --lib -- \
-            --skip session::turn::tests::post_sampling_token_estimate_is_disabled_by_always_on_sinks
+          # Exercise the recursive core residency group with its required stack
+          # size. The upstream project owns the exhaustive core-suite gate.
+          RUST_MIN_STACK=33554432 cargo test -p codex-core --lib \
+            agent::control::residency::tests
       - name: Build release CLI
         run: cargo build --release -p codex-cli --bin codex
       - name: Upload Linux CLI
