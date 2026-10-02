@@ -49,6 +49,11 @@ jobs:
           # size. The upstream project owns the exhaustive core-suite gate.
           RUST_MIN_STACK=33554432 cargo test -p codex-core --lib \
             agent::control::residency::tests
+      - name: Install Linux package-build dependencies
+        working-directory: .
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes libcap-dev
       - name: Assemble Codex package
         working-directory: .
         env:
