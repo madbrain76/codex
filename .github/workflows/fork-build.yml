@@ -49,18 +49,31 @@ jobs:
           # size. The upstream project owns the exhaustive core-suite gate.
           RUST_MIN_STACK=33554432 cargo test -p codex-core --lib \
             agent::control::residency::tests
-      - name: Build release CLI
-        run: cargo build --release -p codex-cli --bin codex
-      - name: Package Linux CLI
+      - name: Assemble Codex package
+        working-directory: .
+        env:
+          CODEX_REPO_ROOT: ${{ github.workspace }}
         run: |
-          mkdir -p dist
-          cp target/release/codex dist/codex
-          tar --create --gzip --file codex-x86_64-unknown-linux-gnu.tar.gz -C dist codex
+          # Produce the same package layout the official standalone installer
+          # ships (bin/codex, bin/codex-code-mode-host, codex-path/rg,
+          # codex-resources/bwrap, codex-package.json) so the daemon's
+          # package validation passes.
+          python3 scripts/build_codex_package.py \
+            --target x86_64-unknown-linux-gnu \
+            --cargo-profile release \
+            --rg-bin "$(command -v rg)" \
+            --force \
+            --archive-output "$RUNNER_TEMP/codex-package-x86_64-unknown-linux-gnu.tar.gz"
+      - name: Smoke test package archive
+        run: |
+          smoke_dir="$(mktemp -d)"
+          tar --extract --gzip --file "$RUNNER_TEMP/codex-package-x86_64-unknown-linux-gnu.tar.gz" -C "$smoke_dir"
+          "$smoke_dir/bin/codex" --version
       - name: Upload Linux CLI
         uses: actions/upload-artifact@v4
         with:
           name: codex-linux-x86_64-${{ github.sha }}
-          path: codex-rs/codex-x86_64-unknown-linux-gnu.tar.gz
+          path: ${{ runner.temp }}/codex-package-x86_64-unknown-linux-gnu.tar.gz
           if-no-files-found: error
           retention-days: 14
       - name: Publish latest fork release
@@ -70,7 +83,7 @@ jobs:
         run: |
           tag=fork-latest
           gh release delete "$tag" --yes --cleanup-tag || true
-          gh release create "$tag" codex-x86_64-unknown-linux-gnu.tar.gz \
+          gh release create "$tag" "$RUNNER_TEMP/codex-package-x86_64-unknown-linux-gnu.tar.gz" \
             --title "Fork latest (${GITHUB_SHA::12})" \
             --notes "Built by the passing fork-build workflow from ${GITHUB_SHA}." \
             --latest
