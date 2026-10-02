@@ -13,26 +13,25 @@ If you want Codex in your code editor (VS Code, Cursor, Windsurf), <a href="http
 
 ### Installing and running Codex CLI
 
-This fork's tested build is the Linux CLI artifact from its
-[GitHub Actions workflow](../../actions/workflows/fork-build.yml). Open the
-latest successful run, download the `codex-linux-x86_64-<commit>` artifact,
-then install the extracted `codex` binary:
+Install this fork's latest passing Linux x86_64 build with:
 
 ```shell
-install -Dm755 codex ~/.local/bin/codex
+curl -fsSL https://raw.githubusercontent.com/madbrain76/codex/feat/enter-auto-submit/scripts/install/install-fork.sh | sh
 codex
 ```
 
-Alternatively, leave the artifact anywhere convenient and use it through the
-local launcher:
+The installer downloads the release asset published by this fork’s
+[GitHub Actions workflow](../../actions/workflows/fork-build.yml) and installs
+it to `~/.local/bin` (or `CODEX_INSTALL_DIR`). To use it through the local
+launcher without installing it globally:
 
 ```shell
 CODEX_BIN=/path/to/codex cdx <alias>
 ```
 
-The workflow currently publishes a Linux x86_64 artifact. For another platform,
-[build from source](./docs/install.md) in this fork rather than using an
-upstream installer.
+The workflow currently publishes Linux x86_64. For another platform, [build
+from source](./docs/install.md) in this fork rather than using an upstream
+installer.
 
 <details>
 <summary>Install unmodified upstream Codex instead</summary>

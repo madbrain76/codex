@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: fork-build-${{ github.workflow }}-${{ github.ref }}
@@ -51,10 +51,26 @@ jobs:
             agent::control::residency::tests
       - name: Build release CLI
         run: cargo build --release -p codex-cli --bin codex
+      - name: Package Linux CLI
+        run: |
+          mkdir -p dist
+          cp target/release/codex dist/codex
+          tar --create --gzip --file codex-x86_64-unknown-linux-gnu.tar.gz -C dist codex
       - name: Upload Linux CLI
         uses: actions/upload-artifact@v4
         with:
           name: codex-linux-x86_64-${{ github.sha }}
-          path: codex-rs/target/release/codex
+          path: codex-rs/codex-x86_64-unknown-linux-gnu.tar.gz
           if-no-files-found: error
           retention-days: 14
+      - name: Publish latest fork release
+        if: github.event_name == 'push' && github.repository == 'madbrain76/codex' && github.ref == 'refs/heads/feat/enter-auto-submit'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag=fork-latest
+          gh release delete "$tag" --yes --cleanup-tag || true
+          gh release create "$tag" codex-x86_64-unknown-linux-gnu.tar.gz \
+            --title "Fork latest (${GITHUB_SHA::12})" \
+            --notes "Built by the passing fork-build workflow from ${GITHUB_SHA}." \
+            --latest
