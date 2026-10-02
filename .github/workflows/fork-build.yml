@@ -50,13 +50,10 @@ jobs:
             --skip daemon_handoff_uses_selected_executable_and_propagates_failure \
             --skip packaged_daemon_bootstrap_seeds_local_package \
             --skip restart_applies_saved_updater_preference
-          # The recursive residency test needs a larger stack; applying that
-          # setting to every core test exhausts hosted-runner memory.
-          RUST_MIN_STACK=33554432 cargo test -p codex-core \
-            interrupted_v2_agent_is_lost_after_residency_eviction
-          # This tracing assertion depends on the runner's test-log subscriber.
-          cargo test -p codex-core -- \
-            --skip interrupted_v2_agent_is_lost_after_residency_eviction \
+          # Recursive residency tests need a larger stack. Run core tests
+          # serially so the hosted runner does not allocate that stack per CPU.
+          RUST_MIN_STACK=33554432 cargo test -p codex-core -- \
+            --test-threads=1 \
             --skip session::turn::tests::post_sampling_token_estimate_is_disabled_by_always_on_sinks
       - name: Build release CLI
         run: cargo build --release -p codex-cli --bin codex
