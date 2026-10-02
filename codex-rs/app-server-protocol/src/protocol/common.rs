@@ -678,6 +678,11 @@ client_request_definitions! {
         serialization: None,
         response: v2::ThreadAttachmentListResponse,
     },
+    ThreadAttachmentOwnerList => "thread/attachmentOwner/list" {
+        params: v2::ThreadAttachmentOwnerListParams,
+        serialization: None,
+        response: v2::ThreadAttachmentOwnerListResponse,
+    },
     ThreadAttachmentRemove => "thread/attachment/remove" {
         params: v2::ThreadAttachmentRemoveParams,
         serialization: thread_id(params.thread_id),
@@ -1298,6 +1303,13 @@ client_request_definitions! {
         params: v2::BedrockSetupParams,
         serialization: global("account-auth"),
         response: v2::BedrockSetupResponse,
+    },
+
+    #[experimental("account/bedrock/checkGovCloudRequirements")]
+    BedrockCheckGovCloudRequirements => "account/bedrock/checkGovCloudRequirements" {
+        params: v2::BedrockCheckGovCloudRequirementsParams,
+        serialization: global("account-auth"),
+        response: v2::BedrockCheckGovCloudRequirementsResponse,
     },
 
     CancelLoginAccount => "account/login/cancel" {
