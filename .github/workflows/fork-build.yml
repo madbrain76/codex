@@ -67,8 +67,19 @@ jobs:
       - name: Smoke test package archive
         run: |
           smoke_dir="$(mktemp -d)"
+          smoke_home="$(mktemp -d)"
+          cleanup() {
+            HOME="$smoke_home" CODEX_HOME="$smoke_home/.codex" \
+              "$smoke_dir/bin/codex" app-server daemon stop >/dev/null 2>&1 || true
+            rm -rf "$smoke_dir" "$smoke_home"
+          }
+          trap cleanup EXIT
           tar --extract --gzip --file "$RUNNER_TEMP/codex-package-x86_64-unknown-linux-gnu.tar.gz" -C "$smoke_dir"
           "$smoke_dir/bin/codex" --version
+          HOME="$smoke_home" CODEX_HOME="$smoke_home/.codex" \
+            "$smoke_dir/bin/codex" app-server daemon start
+          HOME="$smoke_home" CODEX_HOME="$smoke_home/.codex" \
+            "$smoke_dir/bin/codex" app-server daemon version
       - name: Upload Linux CLI
         uses: actions/upload-artifact@v4
         with:
