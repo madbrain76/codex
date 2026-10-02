@@ -494,7 +494,6 @@ async fn enter_submits_an_immediate_same_turn_steer() {
         other => panic!("expected Op::UserTurn, got {other:?}"),
     }
     assert_eq!(chat.input_queue.pending_steers.len(), 1);
-
 }
 
 #[tokio::test]
