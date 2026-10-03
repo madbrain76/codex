@@ -31,9 +31,15 @@ launcher without installing it globally:
 CODEX_BIN=/path/to/codex cdx <alias>
 ```
 
-The workflow currently publishes Linux x86_64. For another platform, [build
-from source](./docs/install.md) in this fork rather than using an upstream
-installer.
+The workflow publishes Linux and Windows x86_64 packages. For another platform,
+[build from source](./docs/install.md) in this fork rather than using an
+upstream installer.
+
+Windows x86_64 packages are installed with PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/madbrain76/codex/main/scripts/install/install-fork.ps1 | iex
+```
 
 <details>
 <summary>Install unmodified upstream Codex instead</summary>

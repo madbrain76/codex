@@ -92,14 +92,70 @@ jobs:
           path: ${{ runner.temp }}/codex-package-x86_64-unknown-linux-gnu.tar.gz
           if-no-files-found: error
           retention-days: 14
-      - name: Publish latest fork release
-        if: github.event_name == 'push' && github.repository == 'madbrain76/codex' && github.ref == 'refs/heads/main'
+
+  windows-cli:
+    name: Windows CLI package
+    runs-on: windows-latest
+    timeout-minutes: 180
+    defaults:
+      run:
+        working-directory: codex-rs
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+      - name: Cache Cargo downloads and build output
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: |
+            ~\.cargo\registry\index
+            ~\.cargo\registry\cache
+            ~\.cargo\git\db
+            codex-rs\target
+          key: fork-build-windows-${{ hashFiles('codex-rs/Cargo.lock') }}
+      - name: Assemble Codex package
+        working-directory: .
+        shell: pwsh
         env:
+          CODEX_REPO_ROOT: ${{ github.workspace }}
+        run: |
+          python scripts/build_codex_package.py `
+            --target x86_64-pc-windows-msvc `
+            --cargo-profile release `
+            --force `
+            --archive-output "$env:RUNNER_TEMP\codex-package-x86_64-pc-windows-msvc.zip"
+      - name: Smoke test package archive
+        shell: pwsh
+        run: |
+          $smoke = Join-Path $env:RUNNER_TEMP "codex-windows-smoke"
+          Expand-Archive -LiteralPath "$env:RUNNER_TEMP\codex-package-x86_64-pc-windows-msvc.zip" -DestinationPath $smoke
+          & "$smoke\bin\codex.exe" --version
+      - name: Upload Windows CLI
+        uses: actions/upload-artifact@v4
+        with:
+          name: codex-windows-x86_64-${{ github.sha }}
+          path: ${{ runner.temp }}\codex-package-x86_64-pc-windows-msvc.zip
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Publish fork release
+    needs: [linux-cli, windows-cli]
+    if: github.event_name == 'push' && github.repository == 'madbrain76/codex' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: codex-*-x86_64-${{ github.sha }}
+          merge-multiple: true
+          path: release
+      - env:
           GH_TOKEN: ${{ github.token }}
         run: |
           tag=fork-latest
           gh release delete "$tag" --yes --cleanup-tag || true
-          gh release create "$tag" "$RUNNER_TEMP/codex-package-x86_64-unknown-linux-gnu.tar.gz" \
+          gh release create "$tag" release/codex-package-x86_64-unknown-linux-gnu.tar.gz release/codex-package-x86_64-pc-windows-msvc.zip \
             --title "Fork latest (${GITHUB_SHA::12})" \
             --notes "Built by the passing fork-build workflow from ${GITHUB_SHA}." \
             --latest
