@@ -14,9 +14,8 @@ use crate::wrapping::adaptive_wrap_lines;
 ///
 /// The widget renders pending steers first, then rejected steers that will be
 /// resubmitted at end of turn, then ordinary queued user messages. Pending
-/// steers explain that they will be submitted after the next tool/result
-/// boundary unless the user invokes the interrupt binding to send them
-/// immediately. The edit hint at the bottom only appears when there are actual
+/// steers explain that they were submitted to the active turn. The edit hint at
+/// the bottom only appears when there are actual
 /// queued user inputs to pop back into the composer. The displayed binding is
 /// configurable via [`set_edit_binding`](Self::set_edit_binding).
 pub(crate) struct PendingInputPreview {
@@ -25,7 +24,7 @@ pub(crate) struct PendingInputPreview {
     pub queued_messages: Vec<String>,
     /// Key combination rendered in the hint line. Defaults to Shift+Left.
     pub(super) edit_binding: Option<key_hint::ShortcutHint>,
-    /// Key combination rendered for immediately interrupting and sending steers.
+    /// Key combination rendered for explicitly interrupting the active turn.
     interrupt_binding: Option<key_hint::ShortcutHint>,
 }
 
@@ -93,12 +92,7 @@ impl PendingInputPreview {
         let mut lines = vec![];
 
         if !self.pending_steers.is_empty() {
-            let mut header = vec!["Messages to be submitted after next tool call".into()];
-            if let Some(interrupt_binding) = self.interrupt_binding {
-                header.push(" (press ".dim());
-                header.extend(interrupt_binding.spans());
-                header.push(" to interrupt and send immediately)".dim());
-            }
+            let header = vec!["Messages submitted to the active turn".into()];
             Self::push_section_header(&mut lines, width, Line::from(header));
 
             for steer in &self.pending_steers {

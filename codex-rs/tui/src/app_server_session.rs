@@ -1869,6 +1869,8 @@ fn config_request_overrides_from_config(
                     | "network"
                     | "permissions"
                     | "personality"
+                    | "model_auto_compact_token_limit"
+                    | "model_context_window"
                     | "sandbox_workspace_write"
                     | "shell_environment_policy"
                     | "suppress_unstable_features_warning"
@@ -3547,6 +3549,44 @@ mod tests {
                 (expected, cli.then_some("none")),
             );
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn config_overrides_forward_session_context_limits() -> Result<()> {
+        let home = tempfile::tempdir()?;
+        let workspace = home.path().join("workspace");
+        std::fs::create_dir_all(&workspace)?;
+        let config = ConfigBuilder::default()
+            .codex_home(home.path().to_path_buf())
+            .harness_overrides(ConfigOverrides {
+                cwd: Some(workspace),
+                ..ConfigOverrides::default()
+            })
+            .loader_overrides(codex_config::LoaderOverrides::without_managed_config_for_tests())
+            .cli_overrides(vec![
+                (
+                    "model_context_window".to_string(),
+                    toml::Value::Integer(524_288),
+                ),
+                (
+                    "model_auto_compact_token_limit".to_string(),
+                    toml::Value::Integer(491_520),
+                ),
+            ])
+            .build()
+            .await?;
+
+        let overrides = config_request_overrides_from_config(&config, ThreadParamsMode::Remote)
+            .expect("config overrides");
+        assert_eq!(
+            overrides.get("model_context_window"),
+            Some(&serde_json::json!(524_288))
+        );
+        assert_eq!(
+            overrides.get("model_auto_compact_token_limit"),
+            Some(&serde_json::json!(491_520))
+        );
         Ok(())
     }
 
