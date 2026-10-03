@@ -72,6 +72,7 @@ jobs:
         run: |
           smoke_dir="$(mktemp -d)"
           smoke_home="$(mktemp -d)"
+          mkdir -p "$smoke_home/.codex"
           cleanup() {
             HOME="$smoke_home" CODEX_HOME="$smoke_home/.codex" \
               "$smoke_dir/bin/codex" app-server daemon stop >/dev/null 2>&1 || true
