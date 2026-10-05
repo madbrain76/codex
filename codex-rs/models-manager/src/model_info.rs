@@ -127,7 +127,10 @@ pub fn model_info_from_slug(slug: &str) -> ModelInfo {
         truncation_policy: TruncationPolicyConfig::bytes(/*limit*/ 10_000),
         supports_image_detail_original: false,
         context_window: Some(272_000),
-        max_context_window: Some(272_000),
+        // Unknown/custom models have no catalog metadata to establish a true
+        // maximum. Keep the conservative default when no override is set, but
+        // let an explicit model_context_window configure larger local models.
+        max_context_window: None,
         auto_compact_token_limit: None,
         comp_hash: None,
         effective_context_window_percent: 95,
