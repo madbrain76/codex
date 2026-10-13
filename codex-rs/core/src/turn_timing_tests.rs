@@ -264,6 +264,7 @@ fn turn_profile_breaks_down_sampling_blocking_and_retry_overhead() {
             after_last_sampling_ms: 100,
             sampling_request_count: 2,
             sampling_retry_count: 1,
+            tools_change_count: 0,
         }
     );
 }
@@ -297,6 +298,7 @@ fn turn_profile_counts_compaction_as_an_exclusive_phase() {
             after_last_sampling_ms: 100,
             sampling_request_count: 1,
             sampling_retry_count: 0,
+            tools_change_count: 0,
         }
     );
 }
