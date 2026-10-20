@@ -219,6 +219,8 @@ fn response_item_records_turn_ttft_ignores_empty_non_output_items() {
 fn response_timing_capture_records_semantic_generation_only() {
     let mut tool_only = ResponseTimingCapture::start();
     tool_only.observe(&ResponseEvent::OutputItemDone(ResponseItem::FunctionCall {
+        status: None,
+        encrypted_content: None,
         id: None,
         name: "shell".to_string(),
         namespace: None,
