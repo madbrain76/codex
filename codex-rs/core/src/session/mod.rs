@@ -4958,6 +4958,7 @@ impl Session {
                 turn_context,
                 response_id,
                 incomplete.token_usage.as_ref(),
+                None,
             )
             .await;
         }
@@ -5006,7 +5007,7 @@ impl Session {
             }),
         )
         .await;
-        self.record_response_token_usage(turn_context, response_id, usage)
+        self.record_response_token_usage(turn_context, response_id, usage, timing)
             .await;
     }
 
@@ -5015,6 +5016,7 @@ impl Session {
         turn_context: &TurnContext,
         response_id: &str,
         usage: Option<&TokenUsage>,
+        timing: Option<ResponseTiming>,
     ) {
         let Some(usage) = usage else {
             return;
