@@ -107,6 +107,11 @@ jobs:
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+      - name: Enable Git long paths (vendored rusty_v8 checkout)
+        shell: pwsh
+        run: |
+          git config --system core.longpaths true
+          git config --global core.longpaths true
       - name: Cache Cargo downloads and build output
         uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
@@ -121,6 +126,7 @@ jobs:
         shell: pwsh
         env:
           CODEX_REPO_ROOT: ${{ github.workspace }}
+          CARGO_NET_GIT_FETCH_WITH_CLI: "true"
         run: |
           python scripts/build_codex_package.py `
             --target x86_64-pc-windows-msvc `
