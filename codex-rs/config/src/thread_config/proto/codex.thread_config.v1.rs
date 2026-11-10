@@ -85,6 +85,10 @@ pub struct ModelProvider {
     pub location: ::core::option::Option<::prost::alloc::string::String>,
     #[prost(string, optional, tag = "22")]
     pub credential_file: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(uint64, optional, tag = "23")]
+    pub stream_retry_deadline_ms: ::core::option::Option<u64>,
+    #[prost(uint64, optional, tag = "24")]
+    pub stream_retry_interval_ms: ::core::option::Option<u64>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct StringMap {

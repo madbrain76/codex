@@ -92,6 +92,8 @@ base_url = "http://localhost:11434/v1"
         request_max_retries: None,
         stream_max_retries: None,
         stream_idle_timeout_ms: None,
+        stream_retry_deadline_ms: None,
+        stream_retry_interval_ms: None,
         websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
         supports_websockets: false,
@@ -134,6 +136,8 @@ query_params = { api-version = "2025-04-01-preview" }
         request_max_retries: None,
         stream_max_retries: None,
         stream_idle_timeout_ms: None,
+        stream_retry_deadline_ms: None,
+        stream_retry_interval_ms: None,
         websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
         supports_websockets: false,
@@ -180,6 +184,8 @@ supports_standalone_web_search = true
         request_max_retries: None,
         stream_max_retries: None,
         stream_idle_timeout_ms: None,
+        stream_retry_deadline_ms: None,
+        stream_retry_interval_ms: None,
         websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
         supports_websockets: false,
@@ -375,6 +381,8 @@ fn test_create_amazon_bedrock_provider() {
             request_max_retries: None,
             stream_max_retries: None,
             stream_idle_timeout_ms: None,
+            stream_retry_deadline_ms: None,
+            stream_retry_interval_ms: None,
             websocket_connect_timeout_ms: None,
             requires_openai_auth: false,
             supports_websockets: false,
@@ -1080,4 +1088,26 @@ fn builtin_openai_catalog_accepts_existing_chatgpt_hosts() {
             expected
         );
     }
+}
+
+#[test]
+fn stream_retry_deadline_defaults_disabled_and_is_capped() {
+    let provider = ModelProviderInfo::default();
+    assert_eq!(provider.stream_retry_deadline(), None);
+    assert_eq!(provider.stream_retry_interval(), Duration::from_secs(15));
+
+    let zero: ModelProviderInfo = toml::from_str("stream_retry_deadline_ms = 0").unwrap();
+    assert_eq!(zero.stream_retry_deadline(), None);
+
+    let configured: ModelProviderInfo =
+        toml::from_str("stream_retry_deadline_ms = 300000\nstream_retry_interval_ms = 20000")
+            .unwrap();
+    assert_eq!(configured.stream_retry_deadline(), Some(Duration::from_secs(300)));
+    assert_eq!(configured.stream_retry_interval(), Duration::from_secs(20));
+
+    let oversized: ModelProviderInfo =
+        toml::from_str("stream_retry_deadline_ms = 86400000\nstream_retry_interval_ms = 1")
+            .unwrap();
+    assert_eq!(oversized.stream_retry_deadline(), Some(Duration::from_millis(3_600_000)));
+    assert_eq!(oversized.stream_retry_interval(), Duration::from_secs(1));
 }

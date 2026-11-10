@@ -71,6 +71,8 @@ pub fn read_managed_residency_requirement() -> Option<ResidencyRequirement> {
 const DEFAULT_STREAM_IDLE_TIMEOUT_MS: u64 = 300_000;
 const DEFAULT_STREAM_MAX_RETRIES: u64 = 5;
 const DEFAULT_REQUEST_MAX_RETRIES: u64 = 4;
+const DEFAULT_STREAM_RETRY_INTERVAL_MS: u64 = 15_000;
+const MIN_STREAM_RETRY_INTERVAL_MS: u64 = 1_000;
 const DEFAULT_AWS_CREDENTIAL_EXPORT_TIMEOUT_MS: u64 = 30_000;
 const DEFAULT_AWS_AUTH_REFRESH_TIMEOUT_MS: u64 = 300_000;
 pub const DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS: u64 = 15_000;
@@ -78,6 +80,10 @@ pub const DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS: u64 = 15_000;
 const MAX_STREAM_MAX_RETRIES: u64 = 100;
 /// Hard cap for user-configured `request_max_retries`.
 const MAX_REQUEST_MAX_RETRIES: u64 = 100;
+/// Hard cap for user-configured `stream_retry_deadline_ms`.
+const MAX_STREAM_RETRY_DEADLINE_MS: u64 = 3_600_000;
+/// Hard cap for user-configured `stream_retry_interval_ms`.
+const MAX_STREAM_RETRY_INTERVAL_MS: u64 = 300_000;
 
 const OPENAI_PROVIDER_NAME: &str = "OpenAI";
 const OPENAI_ACTOR_AUTHORIZATION_HEADER: &str = "x-openai-actor-authorization";
@@ -211,6 +217,10 @@ pub struct ModelProviderInfo {
     /// Idle timeout (in milliseconds) to wait for activity on a streaming response before treating
     /// the connection as lost.
     pub stream_idle_timeout_ms: Option<u64>,
+    /// Wall-clock budget for retrying a streaming request the provider could not serve right now.
+    pub stream_retry_deadline_ms: Option<u64>,
+    /// Delay (in milliseconds) between attempts while `stream_retry_deadline_ms` is active.
+    pub stream_retry_interval_ms: Option<u64>,
     /// Maximum time (in milliseconds) to wait for a websocket connection attempt before treating
     /// it as failed.
     pub websocket_connect_timeout_ms: Option<u64>,
@@ -557,6 +567,23 @@ other non-default provider fields are not supported"
             .unwrap_or(Duration::from_millis(DEFAULT_STREAM_IDLE_TIMEOUT_MS))
     }
 
+    /// Effective wall-clock budget for retrying a streaming request that the provider could not
+    /// serve right now, or `None` when the deadline-based retry window is disabled.
+    pub fn stream_retry_deadline(&self) -> Option<Duration> {
+        let milliseconds = self.stream_retry_deadline_ms.filter(|value| *value > 0)?;
+        let capped = milliseconds.min(MAX_STREAM_RETRY_DEADLINE_MS);
+        Some(Duration::from_millis(capped))
+    }
+
+    /// Effective delay between attempts taken while the `stream_retry_deadline` window is open.
+    pub fn stream_retry_interval(&self) -> Duration {
+        let milliseconds = self
+            .stream_retry_interval_ms
+            .unwrap_or(DEFAULT_STREAM_RETRY_INTERVAL_MS)
+            .clamp(MIN_STREAM_RETRY_INTERVAL_MS, MAX_STREAM_RETRY_INTERVAL_MS);
+        Duration::from_millis(milliseconds)
+    }
+
     /// Effective timeout for websocket connect attempts.
     pub fn websocket_connect_timeout(&self) -> Duration {
         self.websocket_connect_timeout_ms
@@ -600,6 +627,8 @@ other non-default provider fields are not supported"
             request_max_retries: None,
             stream_max_retries: None,
             stream_idle_timeout_ms: None,
+            stream_retry_deadline_ms: None,
+            stream_retry_interval_ms: None,
             websocket_connect_timeout_ms: None,
             requires_openai_auth: true,
             supports_websockets: true,
@@ -643,6 +672,8 @@ other non-default provider fields are not supported"
             request_max_retries: None,
             stream_max_retries: None,
             stream_idle_timeout_ms: None,
+            stream_retry_deadline_ms: None,
+            stream_retry_interval_ms: None,
             websocket_connect_timeout_ms: None,
             requires_openai_auth: false,
             supports_websockets: false,
@@ -683,6 +714,8 @@ other non-default provider fields are not supported"
             request_max_retries: None,
             stream_max_retries: None,
             stream_idle_timeout_ms: None,
+            stream_retry_deadline_ms: None,
+            stream_retry_interval_ms: None,
             websocket_connect_timeout_ms: None,
             requires_openai_auth: false,
             supports_websockets: false,
@@ -920,6 +953,8 @@ pub fn create_oss_provider_with_base_url(base_url: &str, wire_api: WireApi) -> M
         request_max_retries: None,
         stream_max_retries: None,
         stream_idle_timeout_ms: None,
+        stream_retry_deadline_ms: None,
+        stream_retry_interval_ms: None,
         websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
         supports_websockets: false,

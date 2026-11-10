@@ -2,6 +2,7 @@
 //! Content-filter guidance is recorded for sampling requests before retry decisions.
 //! Server advice controls timing without extending configured retry limits.
 
+use std::ops::RangeInclusive;
 use std::time::Duration;
 
 use crate::client::ModelClientSession;
@@ -33,6 +34,8 @@ pub(crate) struct ResponsesStreamRetryState {
     retries: u64,
     connection_retries: u64,
     connection_retry_delay: Duration,
+    outage_started_at: Option<Instant>,
+    outage_retries: u64,
 }
 
 impl Default for ResponsesStreamRetryState {
@@ -41,6 +44,8 @@ impl Default for ResponsesStreamRetryState {
             retries: 0,
             connection_retries: 0,
             connection_retry_delay: INITIAL_CONNECTION_RETRY_DELAY,
+            outage_started_at: None,
+            outage_retries: 0,
         }
     }
 }
@@ -48,7 +53,11 @@ impl Default for ResponsesStreamRetryState {
 impl ResponsesStreamRetryState {
     /// Failed sampling attempts that preceded the next successful response.
     pub(crate) fn retry_count(&self) -> u32 {
-        u32::try_from(self.retries.saturating_add(self.connection_retries)).unwrap_or(u32::MAX)
+        let attempts = self
+            .retries
+            .saturating_add(self.connection_retries)
+            .saturating_add(self.outage_retries);
+        u32::try_from(attempts).unwrap_or(u32::MAX)
     }
 }
 
@@ -92,6 +101,56 @@ pub(crate) async fn handle_response_stream_error(
         ResponsesStreamRequest::Sampling => RetryOperation::Sampling,
         ResponsesStreamRequest::RemoteCompactionV2 => RetryOperation::RemoteCompactionV2,
     };
+
+    // A self-hosted server that is restarting answers with 503s or aborts the stream outright.
+    // Keep the turn alive on a flat poll until the configured wall-clock deadline expires, then
+    // fall through to the count-based policy so the error is still surfaced.
+    if let Some(deadline) = turn_context.provider.info().stream_retry_deadline()
+        && matches!(request, ResponsesStreamRequest::Sampling)
+        && !turn_context.session_source.is_internal()
+        && is_transient_provider_outage(&err)
+    {
+        let now = Instant::now();
+        let elapsed = retry_state
+            .outage_started_at
+            .map(|started_at| now.saturating_duration_since(started_at))
+            .unwrap_or_default();
+        if elapsed < deadline {
+            if retry_state.outage_started_at.is_none() {
+                retry_state.outage_started_at = Some(now);
+            }
+            retry_state.outage_retries = retry_state.outage_retries.saturating_add(1);
+            let delay = turn_context
+                .provider
+                .info()
+                .stream_retry_interval()
+                .min(deadline.saturating_sub(elapsed));
+            warn!(
+                turn_id = %turn_context.sub_id,
+                outage_retries = retry_state.outage_retries,
+                ?elapsed,
+                ?deadline,
+                ?delay,
+                outage_error = %err,
+                "provider could not serve the request; retrying before deadline"
+            );
+            sess.notify_stream_error(
+                turn_context,
+                format!("Reconnecting... provider unavailable ({elapsed:?}/{deadline:?})"),
+                err,
+            )
+            .await;
+            codex_client::record_retry!(retry_state.outage_retries, delay, operation);
+            tokio::time::sleep(delay).await;
+            return Ok(());
+        }
+        warn!(
+            turn_id = %turn_context.sub_id,
+            ?deadline,
+            "provider still unavailable after retry deadline"
+        );
+    }
+
     let retry_count = retry_state.retries.saturating_add(1);
     let Some(delay) = err.retry_delay(retry_count) else {
         return Err(err);
@@ -181,6 +240,29 @@ pub(crate) async fn handle_response_stream_error(
             retry_at: retry_after.map(RetryAfter::deadline),
         });
     Err(err)
+}
+
+/// Statuses that mean the provider could not serve the request right now rather than rejecting
+/// its contents, so spending the retry deadline on them is worthwhile.
+const TRANSIENT_SERVER_STATUS_RANGE: RangeInclusive<u16> = 500..=599;
+
+/// Returns whether `err` indicates transient provider unavailability, as opposed to a request
+/// that was rejected for its contents. Only transient failures consume the retry deadline.
+fn is_transient_provider_outage(err: &CodexErr) -> bool {
+    if let Some(status) = err.http_status_code_value() {
+        return TRANSIENT_SERVER_STATUS_RANGE.contains(&status);
+    }
+    matches!(
+        err.details(),
+        CodexErrorDetails::Stream(..)
+            | CodexErrorDetails::ResponseStreamFailed(_)
+            | CodexErrorDetails::ConnectionFailed(_)
+            | CodexErrorDetails::InternalServerError
+            | CodexErrorDetails::ServerOverloaded
+            | CodexErrorDetails::PolicyCapacityUnavailable
+            | CodexErrorDetails::Timeout
+            | CodexErrorDetails::RequestTimeout
+    )
 }
 
 fn log_retry(

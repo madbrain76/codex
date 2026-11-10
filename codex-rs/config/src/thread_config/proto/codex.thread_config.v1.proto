@@ -53,6 +53,8 @@ message ModelProvider {
   optional string project_id = 20;
   optional string location = 21;
   optional string credential_file = 22;
+  optional uint64 stream_retry_deadline_ms = 23;
+  optional uint64 stream_retry_interval_ms = 24;
 }
 
 message StringMap {
