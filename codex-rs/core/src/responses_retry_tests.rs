@@ -264,7 +264,9 @@ fn transient_outage_detection_spans_provider_availability() {
         identity_error_code: None,
     });
     assert!(!is_transient_provider_outage(&rejected));
-    assert!(!is_transient_provider_outage(&CodexErr::ContextWindowExceeded));
+    assert!(!is_transient_provider_outage(
+        &CodexErr::ContextWindowExceeded
+    ));
     assert!(!is_transient_provider_outage(&CodexErr::QuotaExceeded));
     assert!(!is_transient_provider_outage(&filtered));
     assert!(!is_transient_provider_outage(&bad_request));

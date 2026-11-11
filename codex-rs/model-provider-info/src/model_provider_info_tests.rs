@@ -1102,12 +1102,18 @@ fn stream_retry_deadline_defaults_disabled_and_is_capped() {
     let configured: ModelProviderInfo =
         toml::from_str("stream_retry_deadline_ms = 300000\nstream_retry_interval_ms = 20000")
             .unwrap();
-    assert_eq!(configured.stream_retry_deadline(), Some(Duration::from_secs(300)));
+    assert_eq!(
+        configured.stream_retry_deadline(),
+        Some(Duration::from_secs(300))
+    );
     assert_eq!(configured.stream_retry_interval(), Duration::from_secs(20));
 
     let oversized: ModelProviderInfo =
         toml::from_str("stream_retry_deadline_ms = 86400000\nstream_retry_interval_ms = 1")
             .unwrap();
-    assert_eq!(oversized.stream_retry_deadline(), Some(Duration::from_millis(3_600_000)));
+    assert_eq!(
+        oversized.stream_retry_deadline(),
+        Some(Duration::from_millis(3_600_000))
+    );
     assert_eq!(oversized.stream_retry_interval(), Duration::from_secs(1));
 }
