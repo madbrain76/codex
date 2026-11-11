@@ -442,7 +442,8 @@ async fn start_uninitialized(mut args: InProcessStartArgs) -> IoResult<InProcess
         args.arg0_paths.clone(),
         args.thread_config_loader,
     )
-    .with_embedded_network_policy(args.embedded_network_policy);
+    .with_embedded_network_policy(args.embedded_network_policy)
+    .with_wol_mac(args.config.wol_mac);
     // Keep the caller's project context independent of any fallback policy config.
     let startup_cwd =
         (!args.config.config_layer_stack.is_projectless()).then(|| args.config.cwd.to_path_buf());

@@ -5,6 +5,7 @@ use crate::config_manager::ConfigManager;
 use crate::mcp_refresh::reload_mcp_config;
 use codex_config::types::AuthKeyringBackendKind;
 use codex_core::config::ConfigOverrides;
+use codex_core::wol::MacAddress;
 use codex_exec_server::EnvironmentManager;
 use codex_login::CodexAuth;
 use pretty_assertions::assert_eq;
@@ -65,6 +66,23 @@ async fn reloads_accept_a_provider_supplied_by_thread_overrides() -> anyhow::Res
             }
         );
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn reloads_keep_the_wol_mac_pinned_by_the_embedder() -> anyhow::Result<()> {
+    let home = tempfile::tempdir()?;
+    let wol_mac = MacAddress::parse("aa:bb:cc:dd:ee:ff").expect("valid MAC address");
+    let manager = ConfigManager::without_managed_config_for_tests(home.path().to_path_buf())
+        .with_wol_mac(Some(wol_mac));
+    let config = manager
+        .load_for_cwd(
+            /*request_overrides*/ None,
+            ConfigOverrides::default(),
+            Some(home.path().to_path_buf()),
+        )
+        .await?;
+    assert_eq!(config.wol_mac, Some(wol_mac));
     Ok(())
 }
 

@@ -11,6 +11,7 @@ use codex_config::loader::load_managed_requirements_state;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
+use codex_core::wol::MacAddress;
 use codex_exec_server::LOCAL_FS;
 use codex_features::feature_for_key;
 use codex_login::AuthManager;
@@ -49,6 +50,7 @@ pub(crate) struct ConfigManager {
     strict_config: bool,
     cloud_config_bundle: Arc<RwLock<CloudConfigBundleLoader>>,
     arg0_paths: Arg0DispatchPaths,
+    wol_mac: Option<MacAddress>,
     thread_config_loader: Arc<dyn ThreadConfigLoader>,
     network_policy: codex_http_client::NetworkPolicyController,
     local_network_policy: codex_http_client::NetworkPolicyController,
@@ -108,6 +110,7 @@ impl ConfigManager {
             strict_config,
             cloud_config_bundle: Arc::new(RwLock::new(cloud_config_bundle)),
             arg0_paths,
+            wol_mac: None,
             thread_config_loader,
             network_policy,
             local_network_policy: Default::default(),
@@ -156,6 +159,12 @@ impl ConfigManager {
     ) -> Self {
         self.network_policy = policy.effective;
         self.local_network_policy = policy.local;
+        self
+    }
+
+    /// Pin the Wake-on-LAN target that the embedder resolved from its own command line.
+    pub(crate) fn with_wol_mac(mut self, wol_mac: Option<MacAddress>) -> Self {
+        self.wol_mac = wol_mac;
         self
     }
 
@@ -280,6 +289,7 @@ impl ConfigManager {
         self.apply_network_policy(&mut config);
         self.apply_runtime_feature_enablement(&mut config);
         self.apply_arg0_paths(&mut config);
+        self.apply_wol_mac(&mut config);
         config.config_layer_stack = config
             .config_layer_stack
             .with_mcp_ema_cancellation(mcp_ema_cancellation);
@@ -306,6 +316,7 @@ impl ConfigManager {
         self.apply_network_policy(&mut config);
         self.apply_runtime_feature_enablement(&mut config);
         self.apply_arg0_paths(&mut config);
+        self.apply_wol_mac(&mut config);
         config.config_layer_stack = config
             .config_layer_stack
             .with_mcp_ema_cancellation(mcp_ema_cancellation);
@@ -335,6 +346,7 @@ impl ConfigManager {
         self.apply_network_policy(&mut config);
         self.apply_runtime_feature_enablement(&mut config);
         self.apply_arg0_paths(&mut config);
+        self.apply_wol_mac(&mut config);
         config.config_layer_stack = config
             .config_layer_stack
             .with_mcp_ema_cancellation(mcp_ema_cancellation);
@@ -496,6 +508,7 @@ impl ConfigManager {
         self.apply_network_policy(&mut config);
         self.apply_runtime_feature_enablement(&mut config);
         self.apply_arg0_paths(&mut config);
+        self.apply_wol_mac(&mut config);
         config.config_layer_stack = config
             .config_layer_stack
             .with_mcp_ema_cancellation(mcp_ema_cancellation);
@@ -726,6 +739,7 @@ impl ConfigManager {
         self.apply_network_policy(&mut config);
         self.apply_runtime_feature_enablement(&mut config);
         self.apply_arg0_paths(&mut config);
+        self.apply_wol_mac(&mut config);
         config.config_layer_stack = config
             .config_layer_stack
             .with_mcp_ema_cancellation(mcp_ema_cancellation);
@@ -792,6 +806,13 @@ impl ConfigManager {
     fn apply_arg0_paths(&self, config: &mut Config) {
         config.codex_self_exe = self.arg0_paths.codex_self_exe.clone();
         config.codex_linux_sandbox_exe = self.arg0_paths.codex_linux_sandbox_exe.clone();
+    }
+
+    /// Reloads rebuild `Config` from layers, so a flag-provided MAC has to be reapplied.
+    fn apply_wol_mac(&self, config: &mut Config) {
+        if let Some(wol_mac) = self.wol_mac {
+            config.wol_mac = Some(wol_mac);
+        }
     }
 
     #[cfg(test)]
