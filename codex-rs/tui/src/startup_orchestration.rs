@@ -500,6 +500,7 @@ pub(super) async fn run_main_inner(
         sandbox_mode,
         cwd: cwd_override,
         model_provider: model_provider_override.clone(),
+        wol_mac: cli.wol_mac.clone(),
         codex_self_exe: arg0_paths.codex_self_exe.clone(),
         codex_linux_sandbox_exe: arg0_paths.codex_linux_sandbox_exe.clone(),
         show_raw_agent_reasoning: cli.oss.then_some(true),

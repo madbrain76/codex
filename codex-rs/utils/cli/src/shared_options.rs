@@ -74,6 +74,11 @@ pub struct SharedCliOptions {
     /// Additional directories that should be writable alongside the primary workspace.
     #[arg(long = "add-dir", value_name = "DIR", value_hint = clap::ValueHint::DirPath)]
     pub add_dir: Vec<PathBuf>,
+
+    /// MAC address of the model server to wake with a Wake-on-LAN magic packet when it cannot be
+    /// reached. Accepts `aa:bb:cc:dd:ee:ff`, `aa-bb-cc-dd-ee-ff`, or `aabbccddeeff`.
+    #[arg(long = "wol-mac", value_name = "MAC")]
+    pub wol_mac: Option<String>,
 }
 
 impl SharedCliOptions {
@@ -109,6 +114,7 @@ impl SharedCliOptions {
             cwd,
             worktree,
             add_dir,
+            wol_mac,
         } = self;
         let Self {
             images: root_images,
@@ -123,6 +129,7 @@ impl SharedCliOptions {
             cwd: root_cwd,
             worktree: root_worktree,
             add_dir: root_add_dir,
+            wol_mac: root_wol_mac,
         } = root;
 
         if model.is_none() {
@@ -160,6 +167,9 @@ impl SharedCliOptions {
             merged_add_dir.append(add_dir);
             *add_dir = merged_add_dir;
         }
+        if wol_mac.is_none() {
+            wol_mac.clone_from(root_wol_mac);
+        }
     }
 
     pub fn apply_subcommand_overrides(&mut self, subcommand: Self) {
@@ -179,6 +189,7 @@ impl SharedCliOptions {
             cwd,
             worktree,
             add_dir,
+            wol_mac,
         } = subcommand;
 
         if let Some(model) = model {
@@ -211,6 +222,9 @@ impl SharedCliOptions {
         }
         if !add_dir.is_empty() {
             self.add_dir.extend(add_dir);
+        }
+        if let Some(wol_mac) = wol_mac {
+            self.wol_mac = Some(wol_mac);
         }
     }
 }

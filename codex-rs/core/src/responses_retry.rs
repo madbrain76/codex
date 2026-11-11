@@ -24,6 +24,11 @@ use tracing::warn;
 const INITIAL_CONNECTION_RETRY_DELAY: Duration = Duration::from_secs(5);
 const MAX_CONNECTION_RETRY_DELAY: Duration = Duration::from_secs(60);
 
+// Connection retries are unbounded, so a host that is simply powered off would otherwise be
+// flooded with magic packets. Space them out and cap the interval at a boot timeout.
+const INITIAL_WOL_PACKET_INTERVAL: Duration = Duration::from_secs(30);
+const MAX_WOL_PACKET_INTERVAL: Duration = Duration::from_secs(300);
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum ResponsesStreamRequest {
     Sampling,
@@ -36,6 +41,8 @@ pub(crate) struct ResponsesStreamRetryState {
     connection_retry_delay: Duration,
     outage_started_at: Option<Instant>,
     outage_retries: u64,
+    wol_next_permit_at: Option<Instant>,
+    wol_packet_interval: Duration,
 }
 
 impl Default for ResponsesStreamRetryState {
@@ -46,6 +53,8 @@ impl Default for ResponsesStreamRetryState {
             connection_retry_delay: INITIAL_CONNECTION_RETRY_DELAY,
             outage_started_at: None,
             outage_retries: 0,
+            wol_next_permit_at: None,
+            wol_packet_interval: INITIAL_WOL_PACKET_INTERVAL,
         }
     }
 }
@@ -58,6 +67,25 @@ impl ResponsesStreamRetryState {
             .saturating_add(self.connection_retries)
             .saturating_add(self.outage_retries);
         u32::try_from(attempts).unwrap_or(u32::MAX)
+    }
+
+    /// Consumes one Wake-on-LAN send if enough time has passed since the previous one.
+    ///
+    /// The first call always grants a permit so a powered-off host starts booting immediately,
+    /// then the interval doubles each time, so a machine that is already booting is not hammered
+    /// while a machine that never comes back is still pinged on a predictable cadence.
+    fn take_wol_packet_permit(&mut self, now: Instant) -> bool {
+        if let Some(next_permit_at) = self.wol_next_permit_at
+            && now < next_permit_at
+        {
+            return false;
+        }
+        self.wol_next_permit_at = Some(now + self.wol_packet_interval);
+        self.wol_packet_interval = self
+            .wol_packet_interval
+            .saturating_mul(2)
+            .min(MAX_WOL_PACKET_INTERVAL);
+        true
     }
 }
 
@@ -97,6 +125,20 @@ pub(crate) async fn handle_response_stream_error(
         )
         .await;
     }
+
+    // A powered-off inference box refuses connections exactly like a mistyped URL does, so ask its
+    // network interface to wake up while the retry policy below keeps dialing. Placed ahead of
+    // every retry branch so the host is woken no matter which one handles this error.
+    if matches!(request, ResponsesStreamRequest::Sampling)
+        && matches!(err.details(), CodexErrorDetails::ConnectionFailed(_))
+        && !turn_context.session_source.is_internal()
+        && !turn_context.provider.info().is_amazon_bedrock()
+        && let Some(mac) = turn_context.config.wol_mac
+        && retry_state.take_wol_packet_permit(Instant::now())
+    {
+        crate::wol::wake_host(mac).await;
+    }
+
     let operation = match request {
         ResponsesStreamRequest::Sampling => RetryOperation::Sampling,
         ResponsesStreamRequest::RemoteCompactionV2 => RetryOperation::RemoteCompactionV2,

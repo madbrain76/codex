@@ -7,6 +7,9 @@ use crate::unified_exec::MIN_EMPTY_YIELD_TIME_MS;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
 use crate::windows_sandbox::resolve_windows_sandbox_mode;
 use crate::windows_sandbox::windows_sandbox_level_for_legacy_checks;
+use crate::wol::MacAddress;
+use crate::wol::WOL_MAC_ENV_VAR;
+use crate::wol::resolve_wol_target;
 use codex_agent_roles::load_agent_roles;
 use codex_config::CloudConfigBundleLoader;
 use codex_config::ConfigLayerSource;
@@ -674,6 +677,11 @@ pub struct Config {
 
     /// Info needed to make an API request to the model.
     pub model_provider: ModelProviderInfo,
+
+    /// Network interface to wake with a Wake-on-LAN magic packet when the model server refuses
+    /// the connection. Resolved from `--wol-mac` or `CODEX_WOL_MAC`, and absent when neither is
+    /// configured or the configured value is not a MAC address.
+    pub wol_mac: Option<MacAddress>,
 
     /// Deprecated: `friendly` and `pragmatic` no longer select a style.
     pub personality: Option<Personality>,
@@ -2771,6 +2779,9 @@ pub struct ConfigOverrides {
     /// Explicit absolute runtime workspace roots for this session. When set,
     /// this is the full runtime root list rather than an additive override.
     pub workspace_roots: Option<Vec<AbsolutePathBuf>>,
+    /// MAC address of the network interface to wake when the model server refuses the connection.
+    /// Supplied by `--wol-mac`; `CODEX_WOL_MAC` is read later so the flag keeps precedence.
+    pub wol_mac: Option<String>,
 }
 
 fn dedupe_absolute_paths(paths: &mut Vec<AbsolutePathBuf>) {
@@ -3510,6 +3521,7 @@ impl Config {
             bypass_hook_trust,
             additional_writable_roots,
             workspace_roots: workspace_roots_override,
+            wol_mac,
         } = overrides;
         let bypass_hook_trust = bypass_hook_trust.unwrap_or_default();
 
@@ -3519,6 +3531,12 @@ impl Config {
                     .to_string(),
             );
         }
+
+        let wol_mac = resolve_wol_target(
+            wol_mac.as_deref(),
+            std::env::var(WOL_MAC_ENV_VAR).ok().as_deref(),
+            &mut startup_warnings,
+        );
 
         if sandbox_mode.is_some() && permission_profile.is_some() {
             return Err(std::io::Error::new(
@@ -4545,6 +4563,7 @@ impl Config {
             async_compaction_threshold_percent,
             model_provider_id,
             model_provider,
+            wol_mac,
             cwd: resolved_cwd,
             workspace_roots: workspace_roots.clone(),
             workspace_roots_explicit,

@@ -2096,6 +2096,7 @@ async fn run_debug_prompt_input_command(
         approval_policy,
         sandbox_mode,
         cwd: shared.cwd,
+        wol_mac: shared.wol_mac.clone(),
         codex_self_exe: arg0_paths.codex_self_exe,
         codex_linux_sandbox_exe: arg0_paths.codex_linux_sandbox_exe,
         show_raw_agent_reasoning: shared.oss.then_some(true),

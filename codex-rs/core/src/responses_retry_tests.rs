@@ -1,3 +1,5 @@
+use super::INITIAL_WOL_PACKET_INTERVAL;
+use super::MAX_WOL_PACKET_INTERVAL;
 use super::ResponsesStreamRequest;
 use super::ResponsesStreamRetryState;
 use super::handle_response_stream_error;
@@ -272,4 +274,53 @@ fn transient_outage_detection_spans_provider_availability() {
     assert!(!is_transient_provider_outage(&CodexErr::QuotaExceeded));
     assert!(!is_transient_provider_outage(&filtered));
     assert!(!is_transient_provider_outage(&bad_request));
+}
+
+#[test]
+fn first_wol_packet_permit_is_immediate_and_the_next_is_throttled() {
+    let failed_at = Instant::now();
+    let mut retry_state = ResponsesStreamRetryState::default();
+
+    assert!(
+        retry_state.take_wol_packet_permit(failed_at),
+        "the first connection failure should wake the host without waiting"
+    );
+    assert!(
+        !retry_state.take_wol_packet_permit(failed_at),
+        "back-to-back failures must not resend the magic packet"
+    );
+    assert!(
+        !retry_state.take_wol_packet_permit(failed_at + INITIAL_WOL_PACKET_INTERVAL / 2),
+        "a retry inside the throttling window must not resend the magic packet"
+    );
+    assert!(
+        retry_state.take_wol_packet_permit(failed_at + INITIAL_WOL_PACKET_INTERVAL),
+        "the magic packet should be permitted again once the window expires"
+    );
+}
+
+#[test]
+fn wol_packet_backoff_doubles_until_the_cap() {
+    let started_at = Instant::now();
+    let mut retry_state = ResponsesStreamRetryState::default();
+    let mut sent_at = Vec::new();
+    for second in 0..1_200_u64 {
+        if retry_state.take_wol_packet_permit(started_at + Duration::from_secs(second)) {
+            sent_at.push(Duration::from_secs(second));
+        }
+    }
+
+    assert_eq!(
+        sent_at,
+        vec![
+            Duration::from_secs(0),
+            Duration::from_secs(30),
+            Duration::from_secs(90),
+            Duration::from_secs(210),
+            Duration::from_secs(450),
+            Duration::from_secs(750),
+            Duration::from_secs(1_050),
+        ],
+        "magic packets should back off geometrically, then settle at {MAX_WOL_PACKET_INTERVAL:?}"
+    );
 }

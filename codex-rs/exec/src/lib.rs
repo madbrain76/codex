@@ -316,6 +316,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         cwd,
         mut add_dir,
         worktree,
+        wol_mac,
     } = shared;
 
     if worktree {
@@ -617,6 +618,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         ephemeral: ephemeral.then_some(true),
         bypass_hook_trust: bypass_hook_trust.then_some(true),
         additional_writable_roots: add_dir,
+        wol_mac,
     };
 
     let build_config = |overrides| {

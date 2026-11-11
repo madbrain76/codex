@@ -676,6 +676,7 @@ fn config_overrides_from_interactive(
         approval_policy,
         sandbox_mode,
         cwd: interactive.cwd.clone(),
+        wol_mac: interactive.wol_mac.clone(),
         model_provider: interactive
             .oss
             .then(|| interactive.oss_provider.clone())
