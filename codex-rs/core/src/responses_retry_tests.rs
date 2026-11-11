@@ -130,6 +130,7 @@ async fn sampling_retry_polls_until_provider_retry_deadline_expires() {
     let mut retry_state = ResponsesStreamRetryState::default();
 
     tokio::time::pause();
+    let started_at = Instant::now();
 
     for attempt in 1..=4 {
         let err = CodexErr::Stream(NON_FINITE_LOGITS.to_string());
@@ -146,9 +147,10 @@ async fn sampling_retry_polls_until_provider_retry_deadline_expires() {
         retry.unwrap_or_else(|err| panic!("attempt {attempt} should retry: {err}"));
         let expected = Duration::from_secs(15 * attempt);
         let resumed_at = Instant::now();
+        let elapsed = resumed_at - started_at;
         assert!(
-            (expected..=expected + Duration::from_millis(10)).contains(&resumed_at),
-            "attempt {attempt} resumed at {resumed_at:?}, expected {expected:?}"
+            (expected..=expected + Duration::from_millis(10)).contains(&elapsed),
+            "attempt {attempt} resumed at {elapsed:?}, expected {expected:?}"
         );
     }
     assert_eq!(retry_state.retry_count(), 4);
