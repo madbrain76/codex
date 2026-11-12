@@ -3196,7 +3196,7 @@
           "type": "integer"
         },
         "stream_retry_deadline_ms": {
-          "description": "Wall-clock budget for retrying a streaming request the provider could not serve right now.",
+          "description": "Wall-clock budget for retrying a streaming request the provider could not serve right now. Defaults to ten minutes; set to `0` to disable the window and fall back to the count-based `stream_max_retries` policy.",
           "format": "uint64",
           "minimum": 0.0,
           "type": "integer"

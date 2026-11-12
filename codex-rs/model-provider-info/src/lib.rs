@@ -74,6 +74,10 @@ const DEFAULT_STREAM_MAX_RETRIES: u64 = 5;
 const DEFAULT_REQUEST_MAX_RETRIES: u64 = 4;
 const DEFAULT_STREAM_RETRY_INTERVAL_MS: u64 = 15_000;
 const MIN_STREAM_RETRY_INTERVAL_MS: u64 = 1_000;
+/// Default wall-clock budget for retrying a streaming request the provider could not serve
+/// right now. A self-hosted server that is reloading a model answers with 503s for minutes, which
+/// is far longer than the count-based stream retries can cover.
+const DEFAULT_STREAM_RETRY_DEADLINE_MS: u64 = 600_000;
 const DEFAULT_AWS_CREDENTIAL_EXPORT_TIMEOUT_MS: u64 = 30_000;
 const DEFAULT_AWS_AUTH_REFRESH_TIMEOUT_MS: u64 = 300_000;
 pub const DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS: u64 = 15_000;
@@ -219,6 +223,8 @@ pub struct ModelProviderInfo {
     /// the connection as lost.
     pub stream_idle_timeout_ms: Option<u64>,
     /// Wall-clock budget for retrying a streaming request the provider could not serve right now.
+    /// Defaults to ten minutes; set to `0` to disable the window and fall back to the count-based
+    /// `stream_max_retries` policy.
     pub stream_retry_deadline_ms: Option<u64>,
     /// Delay (in milliseconds) between attempts while `stream_retry_deadline_ms` is active.
     pub stream_retry_interval_ms: Option<u64>,
@@ -571,7 +577,11 @@ other non-default provider fields are not supported"
     /// Effective wall-clock budget for retrying a streaming request that the provider could not
     /// serve right now, or `None` when the deadline-based retry window is disabled.
     pub fn stream_retry_deadline(&self) -> Option<Duration> {
-        let milliseconds = self.stream_retry_deadline_ms.filter(|value| *value > 0)?;
+        let milliseconds = match self.stream_retry_deadline_ms {
+            Some(0) => return None,
+            Some(milliseconds) => milliseconds,
+            None => DEFAULT_STREAM_RETRY_DEADLINE_MS,
+        };
         let capped = milliseconds.min(MAX_STREAM_RETRY_DEADLINE_MS);
         Some(Duration::from_millis(capped))
     }

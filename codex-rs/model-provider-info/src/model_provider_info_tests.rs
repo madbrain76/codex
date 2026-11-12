@@ -1091,13 +1091,24 @@ fn builtin_openai_catalog_accepts_existing_chatgpt_hosts() {
 }
 
 #[test]
-fn stream_retry_deadline_defaults_disabled_and_is_capped() {
+fn stream_retry_deadline_is_enabled_by_default_and_can_be_disabled() {
     let provider = ModelProviderInfo::default();
-    assert_eq!(provider.stream_retry_deadline(), None);
+    assert_eq!(
+        provider.stream_retry_deadline(),
+        Some(Duration::from_secs(600))
+    );
     assert_eq!(provider.stream_retry_interval(), Duration::from_secs(15));
 
+    // An explicit zero is the only way to opt out of the window; an absent key keeps the default.
     let zero: ModelProviderInfo = toml::from_str("stream_retry_deadline_ms = 0").unwrap();
     assert_eq!(zero.stream_retry_deadline(), None);
+
+    let absent: ModelProviderInfo = toml::from_str("stream_retry_interval_ms = 20000").unwrap();
+    assert_eq!(
+        absent.stream_retry_deadline(),
+        Some(Duration::from_secs(600)),
+        "an unconfigured deadline must keep the default window"
+    );
 
     let configured: ModelProviderInfo =
         toml::from_str("stream_retry_deadline_ms = 300000\nstream_retry_interval_ms = 20000")

@@ -162,11 +162,23 @@ pub(crate) async fn handle_response_stream_error(
                 retry_state.outage_started_at = Some(now);
             }
             retry_state.outage_retries = retry_state.outage_retries.saturating_add(1);
-            let delay = turn_context
-                .provider
-                .info()
-                .stream_retry_interval()
-                .min(deadline.saturating_sub(elapsed));
+            // Honor the server's own advice when it sends some, but never let it push the next
+            // attempt past the end of the configured window. Without advice, poll on a flat
+            // interval so a slow model reload is not hammered.
+            let remaining = deadline.saturating_sub(elapsed);
+            let window_end = now + remaining;
+            let default_retry_at = now
+                + turn_context
+                    .provider
+                    .info()
+                    .stream_retry_interval()
+                    .min(remaining);
+            let retry_at = err
+                .retry_after()
+                .map(RetryAfter::deadline)
+                .unwrap_or(default_retry_at)
+                .min(window_end);
+            let delay = retry_at.saturating_duration_since(now);
             warn!(
                 turn_id = %turn_context.sub_id,
                 outage_retries = retry_state.outage_retries,
@@ -183,7 +195,9 @@ pub(crate) async fn handle_response_stream_error(
             )
             .await;
             codex_client::record_retry!(retry_state.outage_retries, delay, operation);
-            tokio::time::sleep(delay).await;
+            // Sleep against the absolute deadline so time spent notifying the UI is not counted
+            // twice, which would push a server-advised retry later than the server asked.
+            tokio::time::sleep_until(retry_at).await;
             return Ok(());
         }
         warn!(

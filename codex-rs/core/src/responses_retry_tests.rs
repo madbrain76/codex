@@ -235,6 +235,49 @@ async fn provider_retry_deadline_ignores_rejected_requests() {
     assert_eq!(retry_state.retry_count(), 0);
 }
 
+/// The retry window is enabled by default, so a self-hosted server that answers 503 while it
+/// reloads a model is polled without the operator configuring `stream_retry_deadline_ms`.
+#[tokio::test]
+async fn unconfigured_provider_retries_service_unavailable_by_default() {
+    let (mut session, mut turn_context) = make_session_and_context().await;
+    let provider = ModelProviderInfo::default();
+    assert_eq!(
+        provider.stream_retry_deadline(),
+        Some(Duration::from_secs(600)),
+        "an unconfigured provider must still retry a provider outage"
+    );
+    turn_context.provider = create_model_provider(provider, /*auth_manager*/ None);
+    let step_context = StepContext::for_test(Arc::new(turn_context));
+    session.realtime_history = Some(Mutex::new(RealtimeHistoryState::default()));
+    let mut client_session = session.services.model_client.new_session();
+    let mut retry_state = ResponsesStreamRetryState::default();
+
+    tokio::time::pause();
+
+    let err = CodexErr::UnexpectedStatus(UnexpectedResponseError {
+        status: http::StatusCode::SERVICE_UNAVAILABLE,
+        body: "model is still loading".to_string(),
+        user_message: None,
+        url: None,
+        cf_ray: None,
+        request_id: None,
+        identity_authorization_error: None,
+        identity_error_code: None,
+    });
+    let result = handle_response_stream_error(
+        &mut retry_state,
+        /*max_retries*/ 5,
+        err,
+        &mut client_session,
+        &session,
+        &step_context,
+        ResponsesStreamRequest::Sampling,
+    )
+    .await;
+    result.expect("a 503 from an unconfigured provider must be retried");
+    assert_eq!(retry_state.retry_count(), 1);
+}
+
 #[test]
 fn transient_outage_detection_spans_provider_availability() {
     let aborted = CodexErr::Stream(NON_FINITE_LOGITS.to_string());
