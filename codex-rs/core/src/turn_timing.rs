@@ -144,7 +144,9 @@ pub(crate) struct TurnProfileTimingGuard {
 /// Ephemeral timing state for one outbound response request.
 ///
 /// This must remain separate from `TurnTimingState`: a turn may issue multiple
-/// requests with tool work, retries, or compaction between them.
+/// requests with tool work, retries, or compaction between them, and a resampled
+/// response re-requests within the same event loop. `complete` re-arms the capture
+/// so every request reports the interval it actually covered.
 #[derive(Debug)]
 pub(crate) struct ResponseTimingCapture {
     request_started_at: Instant,
@@ -170,7 +172,7 @@ impl ResponseTimingCapture {
         }
     }
 
-    pub(crate) fn complete(self, retry_count: u32) -> ResponseTiming {
+    pub(crate) fn complete(&mut self, retry_count: u32) -> ResponseTiming {
         let completed_at = Instant::now();
         let request_duration_ms = duration_ms(completed_at, self.request_started_at);
         let time_to_first_generation_ms = self
@@ -179,7 +181,7 @@ impl ResponseTimingCapture {
         let generation_duration_ms = self
             .first_generation_at
             .map(|first_generation_at| duration_ms(completed_at, first_generation_at));
-        ResponseTiming {
+        let timing = ResponseTiming {
             request_started_at_ms: Some(self.request_started_at_ms),
             first_generation_event_at_ms: self.first_generation_at_ms,
             completed_at_ms: Some(now_unix_timestamp_ms()),
@@ -187,7 +189,9 @@ impl ResponseTimingCapture {
             generation_duration_ms,
             request_duration_ms: Some(request_duration_ms),
             retry_count,
-        }
+        };
+        *self = Self::start();
+        timing
     }
 }
 
